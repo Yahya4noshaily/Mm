@@ -2,6 +2,7 @@
 import asyncio
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
@@ -22,6 +23,7 @@ from engine import PRESETS, signal
 from telegram_alerts import TelegramAlerts, TelegramError
 
 app=FastAPI(title='Quantum Simons',docs_url=None,redoc_url=None)
+logger=logging.getLogger('quantum-simons')
 ROOT=Path(__file__).parent
 ID=os.getenv('CTRADER_CLIENT_ID','').strip()
 SECRET=os.getenv('CTRADER_CLIENT_SECRET','').strip()
@@ -35,6 +37,7 @@ memory={
  'token':None,'refresh_token':None,'token_expires':0,
  'accounts':[],'selected_account':None,'oauth_state':None,
  'connected':False,'error':'لم يتم ربط cTrader بعد',
+ 'phase':'idle','market_health':{},
  'mode':'active','history':[],'quotes':{},'candles':{},
  'decisions':{'XAUUSD':{'side':'WAIT','reason':'بانتظار الاتصال'},'BTCUSD':{'side':'WAIT','reason':'بانتظار الاتصال'}},
  'symbols':{},'last_seen':{},'last_signal_ts':{},'last_eval':{},
@@ -64,12 +67,27 @@ class CTrader:
         self.ws=None
         self.pending={}
         self.receiver=None
+        self.heartbeat_task=None
         self.on_event=on_event
     async def open(self):
         self.ws=await websockets.connect('wss://'+self.endpoint+'.ctraderapi.com:5036/',
             ping_interval=20,ping_timeout=20,max_size=6000000,open_timeout=14)
         self.receiver=asyncio.create_task(self.read_loop())
-        return await self.request(2100,{'clientId':ID,'clientSecret':SECRET})
+        response=await self.request(2100,{'clientId':ID,'clientSecret':SECRET})
+        self.heartbeat_task=asyncio.create_task(self.heartbeat_loop())
+        return response
+    async def heartbeat_loop(self):
+        try:
+            while self.ws:
+                await asyncio.sleep(9)
+                await self.ws.send(json.dumps({
+                    'clientMsgId':'heartbeat-'+uuid.uuid4().hex,
+                    'payloadType':51,'payload':{}}))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning('Heartbeat interrupted: %s',type(exc).__name__)
+
     async def request(self,kind,payload,timeout=18):
         if not self.ws:raise RuntimeError('No cTrader connection')
         mid=uuid.uuid4().hex
@@ -93,11 +111,17 @@ class CTrader:
                 if fut and not fut.done():fut.set_result(message)
                 elif self.on_event:await self.on_event(message)
         except asyncio.CancelledError:raise
-        except Exception:pass
+        except Exception as exc:
+            logger.warning('cTrader reader exited: %s',type(exc).__name__)
         finally:
             for future in list(self.pending.values()):
                 if not future.done():future.set_exception(ConnectionError('cTrader disconnected'))
     async def close(self):
+        if self.heartbeat_task:
+            self.heartbeat_task.cancel()
+            try:await self.heartbeat_task
+            except (asyncio.CancelledError,Exception):pass
+            self.heartbeat_task=None
         if self.ws:await self.ws.close()
         if self.receiver:
             self.receiver.cancel()
@@ -141,7 +165,9 @@ class Monitor:
             if item.get('ask') is not None:q['ask']=int(item['ask'])/1e5
             if q.get('ask') and q.get('bid') and q['ask']>q['bid']:
                 self.spreads[market].append(q['ask']-q['bid'])
-            q['received_at']=time.time()
+            if q.get('bid') and q.get('ask'):
+                q['received_at']=time.time()
+                memory['market_health'].setdefault(market,{})['last_quote_at']=q['received_at']
             if item.get('timestamp'):
                 stamp=int(item['timestamp'])
                 q['market_ts']=stamp/1000 if stamp>100_000_000_000 else stamp
@@ -165,40 +191,101 @@ class Monitor:
             try:
                 await self.connect_one()
                 while True:
-                    if not self.conn or not self.conn.ws or self.conn.receiver.done():break
+                    if not self.conn or not self.conn.ws or self.conn.receiver.done():
+                        raise ConnectionError('cTrader socket reader stopped')
                     minute=int(time.time()//60)
                     for market in list(memory['symbols']):
-                        if memory['last_eval'].get(market)==minute:continue
-                        if time.time()%60<2:continue
+                        health=memory['market_health'].get(market,{})
+                        if not health.get('spot_subscribed'):
+                            continue
+                        if memory['last_eval'].get(market)==minute:
+                            continue
+                        if time.time()%60<2:
+                            continue
                         memory['last_eval'][market]=minute
-                        await self.update_market(market)
+                        try:
+                            await self.update_market(market)
+                            health.pop('analysis_error',None)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            logger.warning('Market candles failed %s: %s',market,type(exc).__name__)
+                            health['analysis_error']='تعذر تحديث شموع '+market+': '+type(exc).__name__
+                            memory['decisions'][market]={'side':'WAIT','reason':health['analysis_error']}
                     await asyncio.sleep(1.25)
-            except asyncio.CancelledError:break
-            except Exception as e:
-                memory['error']='انقطع اتصال cTrader أو تعذرت قراءة البيانات: '+str(e)[:110]
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning('cTrader reconnect: %s: %s',type(exc).__name__,str(exc)[:100])
+                memory['error']='إعادة اتصال cTrader: '+str(exc)[:100]
             finally:
                 memory['connected']=False
+                memory['phase']='reconnecting'
                 for market in ('XAUUSD','BTCUSD'):
-                    memory['decisions'][market]={'side':'WAIT','reason':'اتصال غير متاح؛ لا يمكن إصدار إشارة'}
-                if self.conn:await self.conn.close()
+                    memory['decisions'][market]={'side':'WAIT','reason':'جارٍ إعادة اتصال cTrader'}
+                    memory['market_health'].setdefault(market,{})['spot_subscribed']=False
+                if self.conn:
+                    await self.conn.close()
                 self.conn=None
             await asyncio.sleep(5)
+
     async def connect_one(self):
         endpoint='live' if self.account['isLive'] else 'demo'
+        memory['phase']='authorizing'
+        memory['connected']=False
+        memory['market_health']={}
+        memory['quotes']={}
         self.conn=CTrader(endpoint,self.on_event)
         await self.conn.open()
-        await self.conn.request(2102,{'ctidTraderAccountId':int(self.account['id']),'accessToken':memory['token']})
-        symbols=await self.conn.request(2114,{'ctidTraderAccountId':int(self.account['id']),'includeArchivedSymbols':False})
+        await self.conn.request(2102,{
+            'ctidTraderAccountId':int(self.account['id']),
+            'accessToken':memory['token']})
+        memory['phase']='finding_symbols'
+        symbols=await self.conn.request(2114,{
+            'ctidTraderAccountId':int(self.account['id']),
+            'includeArchivedSymbols':False})
         memory['symbols']=choose_symbols(symbols.get('symbol',[]))
-        if not memory['symbols']:raise RuntimeError('XAUUSD/BTCUSD symbols unavailable on broker account')
-        for market in memory['symbols']:
-            memory['candles'][market]={'1':await self.bars(market,1),'5':await self.bars(market,5)}
-            await self.conn.request(2127,{'ctidTraderAccountId':int(self.account['id']),
-                'symbolId':[int(memory['symbols'][market]['symbolId'])],'subscribeToSpotTimestamp':True})
-            await self.conn.request(2135,{'ctidTraderAccountId':int(self.account['id']),
-                'symbolId':int(memory['symbols'][market]['symbolId']),'period':1})
+        if not memory['symbols']:
+            raise RuntimeError('XAUUSD/BTCUSD not available on broker account')
+        # Account authentication confirms the socket connection. Candle
+        # fetching must not block the connection indicator.
         memory['connected']=True
+        memory['phase']='subscribing_spots'
+        subscribed=[]
+        for market,sym in memory['symbols'].items():
+            memory['market_health'][market]={'spot_subscribed':False}
+            try:
+                await self.conn.request(2127,{
+                    'ctidTraderAccountId':int(self.account['id']),
+                    'symbolId':[int(sym['symbolId'])],
+                    'subscribeToSpotTimestamp':True},timeout=12)
+                memory['market_health'][market]['spot_subscribed']=True
+                subscribed.append(market)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning('Spot subscription failed %s: %s',market,type(exc).__name__)
+                memory['market_health'][market]['analysis_error']='فشل الاشتراك بأسعار '+market
+        if not subscribed:
+            raise RuntimeError('No successful spot subscriptions')
+        memory['phase']='warming_candles'
+        for market in subscribed:
+            # Historical closed candles (2137) are sufficient for signals;
+            # a live-trendbar (2135) acknowledgement is not required.
+            try:
+                memory['candles'][market]={
+                    '1':await self.bars(market,1),
+                    '5':await self.bars(market,5)}
+                memory['market_health'][market]['candles_loaded']=True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning('Initial candles failed %s: %s',market,type(exc).__name__)
+                memory['market_health'][market]['candles_loaded']=False
+                memory['market_health'][market]['analysis_error']='جارٍ إعادة تحميل شموع '+market
+        memory['phase']='monitoring'
         memory['error']=None
+        logger.info('cTrader authenticated and spot feeds subscribed: %s',','.join(subscribed))
     async def update_market(self,market):
         q=memory['quotes'].get(market,{})
         if not q.get('received_at') or time.time()-q['received_at']>25:
@@ -207,6 +294,11 @@ class Monitor:
         bars1=await self.bars(market,1)
         bars5=await self.bars(market,5) if int(time.time()//60)%5==0 else memory['candles'].get(market,{}).get('5',[])
         memory['candles'][market]={'1':bars1,'5':bars5}
+        now=time.time()
+        if not bars1 or now-(bars1[-1]['t']/1000+60)>185:
+            memory['decisions'][market]={'side':'WAIT','reason':'شموع M1 ليست حديثة؛ السوق مغلق أو التاريخ متأخر'}
+            memory['market_health'].setdefault(market,{})['last_analysis_at']=now
+            return
         result=signal(bars1,bars5,q.get('bid'),q.get('ask'),list(self.spreads[market])[:-1],memory['mode'])
         result['market']=market
         if result['side'] in ('BUY','SELL'):
@@ -224,6 +316,7 @@ class Monitor:
                 # Notify only real, unique BUY/SELL signals, never WAIT.
                 asyncio.create_task(telegram.send_signal(result.copy()))
         memory['decisions'][market]=result
+        memory['market_health'].setdefault(market,{})['last_analysis_at']=time.time()
 
 async def discover_accounts():
     con=CTrader('live')
@@ -266,16 +359,36 @@ async def logout(request:Request):
 async def status(request:Request):
     require_owner(request)
     market_data={}
+    now=time.time()
     for market in ('XAUUSD','BTCUSD'):
         q=memory['quotes'].get(market,{})
+        health=memory['market_health'].get(market,{})
+        bars1=memory['candles'].get(market,{}).get('1',[])
+        bars5=memory['candles'].get(market,{}).get('5',[])
+        quote_fresh=bool(memory['connected'] and health.get('spot_subscribed') and q.get('bid') and q.get('ask') and q.get('received_at') and now-q['received_at']<30)
+        candle_fresh=bool(bars1 and now-(bars1[-1]['t']/1000+60)<185)
+        analysis_ready=bool(quote_fresh and candle_fresh and len(bars1)>=145 and len(bars5)>=65 and health.get('last_analysis_at') and now-health['last_analysis_at']<185 and not health.get('analysis_error'))
+        if analysis_ready:
+            status_text='الأسعار والشموع متزامنة؛ تحليل الإشارات جاهز'
+        elif quote_fresh and not candle_fresh:
+            status_text='الأسعار تتحدث لكن شموع M1 غير حديثة أو لم تصل'
+        elif quote_fresh:
+            status_text='الأسعار تتحدث؛ جارٍ تهيئة تحليل الشموع'
+        elif memory['connected']:
+            status_text='اتصال cTrader قائم؛ لا توجد تسعيرات جديدة لهذا السوق'
+        else:
+            status_text='اتصال cTrader يعيد المحاولة أو متوقف'
         market_data[market]={
+            'quote_fresh':quote_fresh,'candle_fresh':candle_fresh,
+            'analysis_ready':analysis_ready,'status_text':status_text,
+            'analysis_error':health.get('analysis_error'),
             'quote':q,'decision':memory['decisions'][market],
             'spread':round(q.get('ask',0)-q.get('bid',0),5) if q.get('bid') and q.get('ask') else None,
             'bar_count_m1':len(memory['candles'].get(market,{}).get('1',[])),
             'bar_count_m5':len(memory['candles'].get(market,{}).get('5',[])),
             'symbol':memory['symbols'].get(market),
             'spark':[round(b['c'],5) for b in memory['candles'].get(market,{}).get('1',[])[-40:]]}
-    return {'connected':memory['connected'],'error':memory['error'],
+    return {'connected':memory['connected'],'phase':memory['phase'],'error':memory['error'],
         'authenticated_to_ctrader':bool(memory['token']),
         'account':memory['selected_account'],'accounts':memory['accounts'],
         'mode':memory['mode'],'presets':PRESETS,'markets':market_data,
@@ -333,6 +446,7 @@ async def set_account(data:AccountChoice,request:Request):
         except (asyncio.CancelledError,Exception):pass
     memory['selected_account']=account;memory['symbols']={}
     memory['quotes']={};memory['candles']={};memory['last_eval']={}
+    memory['connected']=False;memory['phase']='starting';memory['market_health']={}
     memory['error']='جارٍ تأسيس اتصال السوق وجلب الشموع'
     worker=asyncio.create_task(Monitor(account).start())
     return {'ok':True,'connecting':True}
