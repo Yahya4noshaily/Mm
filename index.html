@@ -139,18 +139,21 @@ function tgBusy(busy){
 function render(){
  const data=state.data;if(!data)return;
  state.mode=data.mode||'active';el('mode').value=state.mode;
- const fresh=!!data.connected && !!Object.values(data.markets||{}).some(x=>x.quote&&Date.now()/1000-(x.quote.received_at||0)<30);
- el('connection').textContent=fresh?'● cTrader مباشر':'● غير متصل';
- el('connection').className='chip '+(fresh?'on':'off');
- el('message').textContent=fresh?'يتم التحليل من الأسعار الحقيقية':(data.error||'الخدمة غير متصلة بالأسعار الحية');
  const m=(data.markets||{})[state.market]||{};
  const q=m.quote||{};
- const current=(m.decision||{side:'WAIT',reason:'بانتظار الاتصال'});
- const side=fresh?(current.side||'WAIT'):'WAIT';
+ const fresh=!!m.quote_fresh;
+ const ready=!!m.analysis_ready;
+ const connected=!!data.connected;
+ const current=(m.decision||{side:'WAIT',reason:'جارٍ تهيئة التحليل'});
+ const connectionLabel=ready?'● cTrader مباشر • التحليل جاهز':fresh?'● السعر مباشر • التحليل يُجهّز':connected?'● cTrader متصل':'● غير متصل';
+ el('connection').textContent=connectionLabel;
+ el('connection').className='chip '+(fresh?'on':'off');
+ el('message').textContent=ready?'التحليل يعمل على بيانات حقيقية':(m.status_text||data.error||'جارٍ الاتصال بالسوق');
+ const side=ready?(current.side||'WAIT'):'WAIT';
  toText('marketName',state.market);toText('signal',side);
  el('signal').className='side '+side.toLowerCase();
- toText('reason',fresh?(current.reason||'لم تتوفر أسباب'):data.error||'البيانات غير متاحة الآن؛ لا إشارات.');
- toText('strategy','الاستراتيجية: '+(side==='WAIT'?'لا توجد فرصة مؤهلة':current.strategy||'—'));
+ toText('reason',ready?(current.reason||'لا توجد فرصة مؤهلة'):(m.analysis_error||m.status_text||data.error||'بيانات غير مكتملة؛ لا إشارات.'));
+ toText('strategy',ready?('الاستراتيجية: '+(side==='WAIT'?'لا توجد فرصة مؤهلة':current.strategy||'—')):('حالة المحرك: '+(data.phase||'بانتظار اكتمال البيانات')));
  for(let field of ['entry','stop','target'])toText(field,side==='WAIT'?'—':format(current[field]));
  toText('ask',fresh?format(q.ask):'—');toText('bid',fresh?format(q.bid):'—');toText('spread',fresh?format(m.spread):'—');
  toText('latency',fresh?(Math.max(0,Date.now()/1000-q.received_at)).toFixed(1)+' ثانية':'—');
@@ -173,7 +176,7 @@ function render(){
  if(!state.seen){for(const ev of data.signals||[])if(ev.id)state.previousId[ev.market]=ev.id;state.seen=true}
  renderTelegram(data.telegram||{});
 }
-async function poll(){try{const data=await fetchJSON('/api/status');state.data=data;render();toText('debug','آخر فحص للواجهة: '+new Date().toLocaleTimeString('ar-SA')+' | اتصال الخادم متاح')}catch(e){if(/401|تسجيل الدخول/.test(e.message)){setLogged(false);return}toText('debug','تعذر قراءة الحالة: '+e.message);el('connection').textContent='● تعذر الاتصال';el('connection').className='chip off';el('signal').textContent='WAIT';el('signal').className='side wait'}}
+async function poll(){try{const data=await fetchJSON('/api/status');state.data=data;render();toText('debug','آخر فحص: '+new Date().toLocaleTimeString('ar-SA')+' | مرحلة الربط: '+(data.phase||'غير معروفة')+' | '+((data.markets||{})[state.market]?.status_text||'—'))}catch(e){if(/401|تسجيل الدخول/.test(e.message)){setLogged(false);return}toText('debug','تعذر قراءة الحالة: '+e.message);el('connection').textContent='● تعذر الاتصال';el('connection').className='chip off';el('signal').textContent='WAIT';el('signal').className='side wait'}}
 el('loginForm').addEventListener('submit',async e=>{e.preventDefault();el('loginError').textContent='';try{await fetchJSON('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:el('password').value})});el('password').value='';await checkSession()}catch(err){toText('loginError',err.message)}});
 for(const b of document.querySelectorAll('[data-market]'))b.addEventListener('click',()=>{state.market=b.dataset.market;document.querySelectorAll('[data-market]').forEach(x=>x.classList.toggle('selected',x.dataset.market===state.market));render()});
 el('mode').addEventListener('change',async e=>{try{await fetchJSON('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:e.target.value})});await poll()}catch(err){alert(err.message)}});
