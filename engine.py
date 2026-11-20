@@ -2,7 +2,7 @@
 import statistics
 
 PRESETS = {
-    "active": {"rr": 1.3, "risk_pct": 0.25, "label": "نشط"},
+    "active": {"rr": 1.3, "risk_pct": 0.25, "label": "هجومي"},
     "conservative": {"rr": 2.0, "risk_pct": 0.15, "label": "محافظ"},
 }
 
