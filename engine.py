@@ -3,7 +3,6 @@ import statistics
 
 PRESETS = {
     "active": {"rr": 1.3, "risk_pct": 0.25, "label": "نشط"},
-    "balanced": {"rr": 1.5, "risk_pct": 0.25, "label": "متوازن"},
     "conservative": {"rr": 2.0, "risk_pct": 0.15, "label": "محافظ"},
 }
 
@@ -56,36 +55,44 @@ def adx(bars,n=14):
     for d in dx[n:]:ans=((n-1)*ans+d)/n
     return ans
 
-def choose_setup(m1,m5):
+def choose_setup(m1,m5,mode='active'):
     """Returns potential (side, method, reason) or (None, regime, reason)."""
     if len(m1)<145 or len(m5)<65:return None,'WARMUP','الشموع التاريخية غير كافية بعد'
     cls=[b['c'] for b in m1]; c5=[b['c'] for b in m5]
     trend_adx=adx(m5)
     if trend_adx is None:return None,'WARMUP','مؤشر الاتجاه غير جاهز'
     cur,prev=m1[-1],m1[-2]
+    # Same three strategies for both presets; conservative requires stronger confirmation.
+    conservative = mode == 'conservative'
+    squeeze_ratio = 0.70 if conservative else 0.85
+    range_adx_limit = 16 if conservative else 20
+    trend_adx_min = 24 if conservative else 20
+    z_threshold = 2.2 if conservative else 1.65
+    rsi_buy_limit = 30 if conservative else 38
+    rsi_sell_limit = 70 if conservative else 62
     at=atr_series(m1)
     volatility=at[-1]
     if not volatility or volatility<=0:return None,'WAIT','تعذر قياس التذبذب'
-    for j in range(max(21,len(m1)-5),len(m1)-1):
+    for j in range(max(21,len(m1)-(4 if conservative else 5)),len(m1)-1):
         prior_atrs=[a for a in at[max(0,j-101):j-1] if a is not None]
         if len(prior_atrs)<80 or at[j-1] is None:continue
-        is_compressed=at[j-1] < 0.8*statistics.mean(prior_atrs)
+        is_compressed=at[j-1] < squeeze_ratio*statistics.mean(prior_atrs)
         if not is_compressed:continue
         upper=max(b['h'] for b in m1[j-20:j]);lower=min(b['l'] for b in m1[j-20:j]);bar=m1[j]
         if bar['c']>upper and cur['l']<=upper and cur['c']>upper and cur['c']>cur['o']:
             return 'BUY','Compression Breakout','اختراق نطاق منكمش مع إعادة اختبار صاعدة'
         if bar['c']<lower and cur['h']>=lower and cur['c']<lower and cur['c']<cur['o']:
             return 'SELL','Compression Breakout','اختراق نطاق منكمش مع إعادة اختبار هابطة'
-    if trend_adx<18:
+    if trend_adx<range_adx_limit:
         n=30;avg=statistics.mean(cls[-n:]);sd=statistics.pstdev(cls[-n:])
         z=(cls[-1]-avg)/sd if sd else 0
         mom=rsi(cls)
-        if mom is not None and z<=-1.8 and mom<35 and cur['c']>cur['o'] and cur['c']>prev['c']:
+        if mom is not None and z<=-z_threshold and mom<rsi_buy_limit and cur['c']>cur['o'] and cur['c']>prev['c']:
             return 'BUY','Mean Reversion',f'ارتداد صاعد من انحراف إحصائي {z:.2f} و RSI {mom:.1f}'
-        if mom is not None and z>=1.8 and mom>65 and cur['c']<cur['o'] and cur['c']<prev['c']:
+        if mom is not None and z>=z_threshold and mom>rsi_sell_limit and cur['c']<cur['o'] and cur['c']<prev['c']:
             return 'SELL','Mean Reversion',f'ارتداد هابط من انحراف إحصائي {z:.2f} و RSI {mom:.1f}'
         return None,'RANGE',f'سوق عرضي؛ لم تؤكد شروط الارتداد (ADX {trend_adx:.1f})'
-    if trend_adx>=20:
+    if trend_adx>=trend_adx_min:
         e21=ema(c5,21);e55=ema(c5,55);e20=ema(cls,20)
         buy=e21[-1]>e55[-1] and e21[-1]>e21[-3] and prev['l']<=e20[-2]+0.1*volatility and cur['c']>max(prev['h'],e20[-1])
         sell=e21[-1]<e55[-1] and e21[-1]<e21[-3] and prev['h']>=e20[-2]-0.1*volatility and cur['c']<min(prev['l'],e20[-1])
@@ -94,13 +101,13 @@ def choose_setup(m1,m5):
         return None,'TREND',f'سوق اتجاهي؛ لم تكتمل شروط التصحيح (ADX {trend_adx:.1f})'
     return None,'NEUTRAL',f'منطقة انتقالية؛ لا توجد أفضلية واضحة (ADX {trend_adx:.1f})'
 
-def signal(m1,m5,bid,ask,spreads,mode='balanced'):
+def signal(m1,m5,bid,ask,spreads,mode='active'):
     """Expects sorted, CLOSED bars. Bid/ask are executable side prices."""
-    if mode not in PRESETS:mode='balanced'
+    if mode not in PRESETS:mode='active'
     if not bid or not ask or ask<=bid:return {'side':'WAIT','reason':'لا يوجد سعر تنفيذ صالح'}
     if len(spreads)>=8 and ask-bid>1.5*statistics.median(spreads):
         return {'side':'WAIT','reason':'السبريد الحالي أعلى من 1.5 ضعف متوسطه الحديث'}
-    side,regime,reason=choose_setup(m1,m5)
+    side,regime,reason=choose_setup(m1,m5,mode)
     if side is None:return {'side':'WAIT','regime':regime,'reason':reason}
     atrs=atr_series(m1); at=atrs[-1] if atrs else None
     if not at or at<=0:return {'side':'WAIT','reason':'ATR غير صالح'}
