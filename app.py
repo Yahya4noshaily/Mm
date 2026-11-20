@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from pydantic import BaseModel
 from engine import PRESETS, signal
+from telegram_alerts import TelegramAlerts, TelegramError
 
 app=FastAPI(title='Quantum Simons',docs_url=None,redoc_url=None)
 ROOT=Path(__file__).parent
@@ -28,12 +29,13 @@ OWNER_PASSWORD=os.getenv('SITE_PASSWORD','')
 SITE_SECRET=os.getenv('SITE_SECRET','').strip() or secrets.token_urlsafe(32)
 PUBLIC_URL=os.getenv('PUBLIC_URL','').rstrip('/')
 signer=TimestampSigner(SITE_SECRET)
+telegram=TelegramAlerts()
 
 memory={
  'token':None,'refresh_token':None,'token_expires':0,
  'accounts':[],'selected_account':None,'oauth_state':None,
  'connected':False,'error':'لم يتم ربط cTrader بعد',
- 'mode':'balanced','history':[],'quotes':{},'candles':{},
+ 'mode':'active','history':[],'quotes':{},'candles':{},
  'decisions':{'XAUUSD':{'side':'WAIT','reason':'بانتظار الاتصال'},'BTCUSD':{'side':'WAIT','reason':'بانتظار الاتصال'}},
  'symbols':{},'last_seen':{},'last_signal_ts':{},'last_eval':{},
 }
@@ -216,8 +218,11 @@ class Monitor:
                 result['id']=uuid.uuid4().hex[:12]
                 result['created_at']=datetime.now(timezone.utc).isoformat()
                 memory['last_signal_ts'][market]=t
+                result['mode_label']=PRESETS[memory['mode']]['label']
                 memory['history'].insert(0,result.copy())
                 memory['history']=memory['history'][:100]
+                # Notify only real, unique BUY/SELL signals, never WAIT.
+                asyncio.create_task(telegram.send_signal(result.copy()))
         memory['decisions'][market]=result
 
 async def discover_accounts():
@@ -275,7 +280,7 @@ async def status(request:Request):
         'account':memory['selected_account'],'accounts':memory['accounts'],
         'mode':memory['mode'],'presets':PRESETS,'markets':market_data,
         'signals':memory['history'][:35],'server_time':datetime.now(timezone.utc).isoformat(),
-        'background_push_enabled':False}
+        'background_push_enabled':False,'telegram':telegram.public_status()}
 @app.post('/api/mode')
 async def set_mode(data:ModeChoice,request:Request):
     require_owner(request);require_origin(request)
@@ -331,6 +336,56 @@ async def set_account(data:AccountChoice,request:Request):
     memory['error']='جارٍ تأسيس اتصال السوق وجلب الشموع'
     worker=asyncio.create_task(Monitor(account).start())
     return {'ok':True,'connecting':True}
+
+class TelegramConnect(BaseModel):
+    bot_token: str = ""
+    chat_id: str
+    markets: list[str] = ["XAUUSD", "BTCUSD"]
+
+class TelegramDiscover(BaseModel):
+    bot_token: str = ""
+
+class TelegramToggle(BaseModel):
+    enabled: bool
+
+@app.post('/api/telegram/discover')
+async def telegram_discover(data: TelegramDiscover, request: Request):
+    require_owner(request)
+    require_origin(request)
+    try:
+        return await telegram.discover(data.bot_token)
+    except TelegramError as e:
+        raise HTTPException(400, str(e))
+
+@app.post('/api/telegram/connect')
+async def telegram_connect(data: TelegramConnect, request: Request):
+    require_owner(request)
+    require_origin(request)
+    try:
+        return {"ok": True, "telegram": await telegram.configure(
+            data.bot_token, data.chat_id, data.markets
+        )}
+    except TelegramError as e:
+        raise HTTPException(400, str(e))
+
+@app.post('/api/telegram/test')
+async def telegram_test(request: Request):
+    require_owner(request)
+    require_origin(request)
+    try:
+        return await telegram.send_test()
+    except TelegramError as e:
+        raise HTTPException(400, str(e))
+
+@app.post('/api/telegram/toggle')
+async def telegram_toggle(data: TelegramToggle, request: Request):
+    require_owner(request)
+    require_origin(request)
+    try:
+        return {"ok": True, "telegram": telegram.toggle(data.enabled)}
+    except TelegramError as e:
+        raise HTTPException(400, str(e))
+
 @app.on_event('shutdown')
 async def shutdown():
     global worker
