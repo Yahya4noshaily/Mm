@@ -26,6 +26,7 @@ from session_store import COOKIE_NAME, attach_cookie, deserialize_auth, delete_c
 from paper_journal import update_paper_journal, sanitize_client_backup, settle_on_quote, compute_performance
 from scan_scheduler import can_start_scan, note_scan_attempt, note_scan_success, note_scan_failure, scan_diagnostics
 from connection_health import CTraderApiError, retry_delay_seconds, user_status, HISTORICAL_RATE_LIMITS
+from historical_accuracy import accuracy_snapshot
 
 app=FastAPI(title='Quantum Simons',docs_url=None,redoc_url=None)
 logger=logging.getLogger('quantum-simons')
@@ -420,6 +421,10 @@ class Monitor:
                 result['result_r']=None
                 memory['last_signal_ts'][market]=t
                 result['mode_label']=PRESETS[memory['mode']]['label']
+                # Descriptive success rate measured BEFORE this signal enters the journal.
+                # Does not affect BUY/SELL/WAIT or any threshold in engine.py.
+                result['accuracy_at_issue']=accuracy_snapshot(
+                    memory['history'],int(self.account['id']),market,memory['mode'],result['strategy'])
                 memory['history'].insert(0,result.copy())
                 memory['history']=memory['history'][:200]
                 # Notify only real, unique BUY/SELL signals, never WAIT.
@@ -564,6 +569,10 @@ async def index():return FileResponse(ROOT/'index.html')
 @app.get('/assets/alert_policy.js')
 async def alert_policy_js():
     return FileResponse(ROOT/'alert_policy.js',media_type='application/javascript',headers={'Cache-Control':'no-store'})
+
+@app.get('/assets/accuracy_policy.js')
+async def accuracy_policy_js():
+    return FileResponse(ROOT/'accuracy_policy.js',media_type='application/javascript',headers={'Cache-Control':'no-store'})
 @app.get('/healthz')
 async def health():return {'ok':True,'service':'Quantum Simons','api_configured':bool(ID and SECRET),'journal_tests_passed':getattr(app.state,'journal_tests_passed',False)}
 @app.get('/api/session')
@@ -573,7 +582,7 @@ async def session(request:Request):
     return {'authenticated':ok,'password_configured':bool(OWNER_PASSWORD),
         'api_configured':bool(ID and SECRET),
         'redirect_uri':(PUBLIC_URL+'/api/oauth/callback') if PUBLIC_URL else 'Set PUBLIC_URL',
-        'version':'1.3.1'}
+        'version':'1.4.0'}
 @app.post('/api/login')
 async def login(payload:OwnerLogin,request:Request):
     require_origin(request)

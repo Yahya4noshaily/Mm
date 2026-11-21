@@ -164,6 +164,19 @@ class TelegramAlerts:
         icon = "🟢" if side == "BUY" else "🔴"
         price = lambda x: f"{float(x):,.5f}" if x is not None else "—"
         timestamp = datetime.now(ZoneInfo("Asia/Riyadh")).strftime("%Y-%m-%d %H:%M:%S")
+        past = record.get("accuracy_at_issue") or {}
+        n = int(past.get("resolved") or 0)
+        if n > 0 and past.get("win_rate_pct") is not None:
+            accuracy_text = (
+                f"نجاح الاستراتيجية في السجل التجريبي السابق: {past['win_rate_pct']:.1f}% "
+                f"({past['wins']}/{n} صفقة محسومة)"
+            )
+            if n < 20:
+                accuracy_text += " • عينة صغيرة جدًا"
+            elif n < 50:
+                accuracy_text += " • عينة محدودة"
+        else:
+            accuracy_text = "نجاح الاستراتيجية في السجل التجريبي السابق: غير متاح (لا صفقات محسومة)"
         txt = (
             f"{icon} Quantum Simons • {side}\n"
             f"السوق: {record.get('market', '—')}\n"
@@ -174,8 +187,9 @@ class TelegramAlerts:
             f"الهدف: {price(record.get('target'))}\n"
             f"العائد/المخاطرة: {record.get('rr', '—')}:1\n"
             f"الوضع: {record.get('mode_label', '—')}\n"
+            f"{accuracy_text}\n"
             f"الوقت (السعودية): {timestamp}\n"
-            "ملاحظة: إشارة إحصائية تجريبية وليست ضمان ربح."
+            "ملاحظة: النسبة أداء سابق نظري وليست احتمال ربح هذه الإشارة أو ضمانًا للربح."
         )
         try:
             await self._call(self._token, "sendMessage", {

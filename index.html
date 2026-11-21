@@ -11,16 +11,18 @@
 .performanceOverview{border:1px solid var(--stroke);background:#0c2635;border-radius:11px;padding:12px;font-size:12px;line-height:1.9;color:#dfedee}.performanceModeGrid{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:12px}.perfMode{border:1px solid var(--stroke);background:#0b2635;border-radius:12px;padding:12px;min-width:0}.perfMode h4{font-size:14px;margin:0 0 10px}.perfValue{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}.perfMini{font-size:11px;line-height:1.9;color:var(--muted)}.performanceTableWrap{overflow-x:auto}.performanceTable{width:100%;border-collapse:collapse;min-width:420px;font-size:12px}.performanceTable th{color:var(--muted);font-size:11px;text-align:right;font-weight:600;border-bottom:1px solid var(--stroke);padding:10px 6px}.performanceTable td{border-bottom:1px solid #223d4c;padding:10px 6px}.performanceTable td[data-num]{direction:ltr;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.performanceTable tr:last-child td{border:0}.performanceTable .strategyLabel{font-size:10px;color:var(--muted);display:block;margin-top:3px} @media(max-width:600px){.performanceModeGrid{grid-template-columns:1fr 1fr}.perfValue{font-size:19px}#performanceMarket{max-width:185px;font-size:12px}}
 .scannerDiag{background:#0b2535;border:1px solid #2a4353;border-radius:12px;padding:12px}.scannerDiag .chip{padding:5px 9px;font-size:10px}.scannerDiag b{color:var(--text)}#scannerInfo{margin-top:5px;color:var(--gold)}
 .lastSignalInfo{border-top:1px solid var(--stroke);margin-top:12px;padding-top:11px;line-height:1.8;color:var(--gold);font-size:12px}
+.signalAccuracy{padding:9px 11px;margin-bottom:13px;background:#0b2936;border:1px solid var(--stroke);border-radius:9px;color:var(--gold);line-height:1.7}.accuracyStrategies{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:13px}.accuracyItem{padding:13px 11px;background:#0a2535;border:1px solid var(--stroke);border-radius:13px;min-width:0}.accuracyItem h4{font-size:12px;margin:0 0 7px}.accuracyPct{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--text);direction:ltr;text-align:right}.accuracyCaption{font-size:11px;line-height:1.65;color:var(--muted)}.accuracyNote{font-size:11px;line-height:1.7;color:var(--gold);margin-top:6px}@media(max-width:600px){.accuracyStrategies{grid-template-columns:1fr}.accuracyItem{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px}.accuracyItem h4{grid-column:1/-1}.accuracyPct{text-align:right;font-size:24px}.accuracyCaption{align-self:center}}
 </style></head>
 <body><div class="wrap">
 <header class="head"><div class="brand"><div class="logo">∑</div><div><div class="over">QUANTITATIVE SIGNALS</div><strong>QUANTUM SIMONS</strong></div></div><div id="connection" class="chip off">● غير متصل</div></header>
 <div class="intro"><div><div class="pill" style="display:inline-block">نسخة مستقلة • إشارات فقط</div><h1>اقرأ السوق <span>بالأرقام،<br>لا بالتخمين.</span></h1><p>لوحة كمية تجمع ارتداد السعر إلى المتوسط وتصحيح الاتجاه والاختراق بعد الانكماش. التحليل يعتمد على بيانات cTrader الحقيقية عند الربط، ولا يتضمن خوارزميات Jim Simons السرية.</p></div><div class="tiny">إشارات على M1 • تأكيد الاتجاه على M5<br>بدون تنفيذ صفقات آلية</div></div>
 <section id="login" class="panel login hidden"><h2>🔐 دخول مالك الموقع</h2><p class="fine">الموقع محمي بكلمة المرور الخاصة به، ولا نستخدم كلمة مرور حساب التداول.</p><form id="loginForm"><input id="password" type="password" placeholder="كلمة مرور الموقع" autocomplete="current-password" required><button class="btn main" type="submit">دخول اللوحة</button></form><p id="loginError" class="error"></p></section>
 <main id="dashboard" class="hidden">
-<div style="display:flex;gap:9px;flex-wrap:wrap"><span id="message" class="chip off">بانتظار الاتصال</span><span class="chip">v1.3.1 • إصلاح الاتصال • الاستراتيجيات ثابتة</span></div>
+<div style="display:flex;gap:9px;flex-wrap:wrap"><span id="message" class="chip off">بانتظار الاتصال</span><span class="chip">v1.4 • دقة الاستراتيجيات • القواعد ثابتة</span></div>
 <div class="buttons" id="markets"><button class="btn selected" type="button" data-market="XAUUSD">🥇 الذهب XAUUSD</button><button class="btn" type="button" data-market="BTCUSD">₿ بيتكوين BTCUSD</button></div>
 <div class="layout">
-<section class="panel signal-card"><div><div class="label">الإشارة الحالية • <b id="marketName">XAUUSD</b></div><div id="signal" class="side wait">WAIT</div><div id="reason" class="reason">لن تظهر أي إشارة قبل اكتمال اتصال cTrader واستلام بيانات الشموع والأسعار الفعلية.</div><div id="lastSignalInfo" class="fine lastSignalInfo">آخر إشارة محفوظة: لا توجد إشارات بعد. الإشارات القديمة لا تُعد أمر دخول الآن.</div></div><div><div id="strategy" class="fine" style="margin-bottom:15px">الاستراتيجية: —</div><div class="summary"><div><label>منطقة الدخول</label><b id="entry">—</b></div><div><label>وقف تجريبي</label><b id="stop">—</b></div><div><label>هدف تجريبي</label><b id="target">—</b></div></div></div></section>
+<section class="panel signal-card"><div><div class="label">الإشارة الحالية • <b id="marketName">XAUUSD</b></div><div id="signal" class="side wait">WAIT</div><div id="reason" class="reason">لن تظهر أي إشارة قبل اكتمال اتصال cTrader واستلام بيانات الشموع والأسعار الفعلية.</div><div id="lastSignalInfo" class="fine lastSignalInfo">آخر إشارة محفوظة: لا توجد إشارات بعد. الإشارات القديمة لا تُعد أمر دخول الآن.</div></div><div><div id="strategy" class="fine" style="margin-bottom:10px">الاستراتيجية: —</div>
+<div id="signalAccuracy" class="fine signalAccuracy">نسبة النجاح السابقة لاستراتيجية الإشارة: — (لا توجد إشارة حالية)</div><div class="summary"><div><label>منطقة الدخول</label><b id="entry">—</b></div><div><label>وقف تجريبي</label><b id="stop">—</b></div><div><label>هدف تجريبي</label><b id="target">—</b></div></div></div></section>
 <section class="panel"><h3 class="stats-title">📡 بيانات السوق</h3><div class="stats"><div class="stat"><label>Ask (شراء)</label><b id="ask">—</b></div><div class="stat"><label>Bid (بيع)</label><b id="bid">—</b></div><div class="stat"><label>Spread</label><b id="spread">—</b></div><div class="stat"><label>عمر السعر</label><b id="latency">—</b></div></div><svg id="spark" class="spark" viewBox="0 0 320 70" preserveAspectRatio="none" role="img" aria-label="إغلاقات آخر 40 شمعة مكتملة"><path id="sparkPath" d="" fill="none" stroke="#55dbb8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><div class="spark-label">آخر 40 إغلاق M1 من cTrader</div><div class="line"></div><div class="tiny">الشموع المكتملة: <b id="bars">M1 — · M5 —</b><br>آخر سعر فعلي: <span id="lastTime">—</span></div>
 <div class="scannerDiag" aria-live="polite" style="margin-top:13px">
   <div class="setting-line" style="margin:0 0 5px;align-items:center"><b style="font-size:12px">🔍 حالة ماسح الإشارات</b><span id="scannerState" class="chip off">لم يبدأ</span></div>
@@ -29,6 +31,16 @@
   <div class="tiny">محاولات الفحص / أخطاء البيانات: <b id="scannerCounts">—</b></div>
   <div class="tiny" id="scannerInfo">بمجرد الربط سيظهر هنا هل تُفحص الفرص أو توجد مشكلة بالشموع.</div>
 </div></section></div>
+
+<section class="panel" id="accuracyPanel" style="margin-top:16px">
+  <div class="setting-line" style="margin:0 0 8px;align-items:center">
+    <h3 class="card-title" style="margin:0">🎯 دقة الاستراتيجيات من السجل التجريبي</h3>
+    <span class="chip" id="accuracyScope">حسب السوق والوضع الحاليين</span>
+  </div>
+  <p class="fine">هذه نسبة الصفقات التي وصلت إلى <b>TP</b> من مجموع الصفقات المحسومة <b>TP + SL</b> لكل استراتيجية. الإشارات المفتوحة وغير المؤكدة مستبعدة، ولا تؤثر هذه النسبة على إصدار إشارات BUY أو SELL.</p>
+  <div id="accuracyStrategies" class="accuracyStrategies" aria-live="polite"></div>
+  <p class="fine" style="margin:11px 0 0">النتائج من سجل آخر 200 إشارة محفوظة في هذا المتصفح للحساب والسوق والوضع المختارين. النطاق الإحصائي تقريبي، ولا تعني النسبة احتمال نجاح الصفقة المقبلة أو ضمان أرباح.</p>
+</section>
 <div class="below">
 <section class="panel"><h3 class="card-title">⚙️ إعدادات الاستراتيجية والاتصال</h3><div class="setting-line"><label for="mode" class="fine">نمط الإشارات</label><select id="mode"><option value="active" selected>هجومي • حد أدنى 1.3:1</option><option value="conservative">محافظ • حد أدنى 2:1</option></select></div><div class="setting-line"><label for="account" class="fine">حساب cTrader</label><select id="account"><option value="">اختر الحساب بعد الربط</option></select></div><div class="setting-line"><span class="fine">ربط API الرسمي</span><div style="display:flex;flex-wrap:wrap;gap:8px"><button class="btn main" type="button" id="connect">ربط cTrader</button><button class="btn" type="button" id="restart">↻ إعادة تشغيل المراقبة</button></div></div><p class="tiny">عند أول ربط بعد هذا التحديث، يتم حفظ التفويض مشفّرًا في كوكي آمنة لاستعادة الحساب بعد نوم الخادم.</p><div class="tiny" id="apiNote">يحتاج Client ID وClient Secret من تطبيق cTrader مستقل مفعّل.</div><div class="tiny" style="margin-top:6px">Redirect URI: <span id="redirect">—</span> <button class="btn" id="copy" type="button" style="padding:5px 9px">نسخ</button></div><div class="line"></div><div class="setting-line"><span class="fine">تنبيه صوتي أثناء فتح الصفحة</span><button id="audio" class="btn" type="button">تفعيل الصوت</button></div><div class="setting-line"><span class="fine">إشعارات المتصفح</span><button id="notifications" class="btn" type="button">طلب الإذن</button></div><div class="setting-line"><span class="fine">إنهاء جلسة الموقع</span><button id="logout" class="btn danger" type="button">تسجيل الخروج</button></div></section>
 <section class="panel">
@@ -105,6 +117,7 @@
 </main><div class="footer">Quantum Simons • Quantitative Research Dashboard • نسخة مستقلة بدون ربط مع أي مشروع سابق</div>
 </div>
 <script src="/assets/alert_policy.js"></script>
+<script src="/assets/accuracy_policy.js"></script>
 <script>
 (()=>{'use strict';
 const el=id=>document.getElementById(id);
@@ -300,6 +313,57 @@ function renderPerformance(){
  }
 }
 
+
+function precisionAccountId(){
+ const active=state.data?.account?.id;
+ if(active!=null && active!==''){
+  writeStorage('qs-accuracy-last-account-v1',String(active));
+  return active;
+ }
+ return readStorage('qs-accuracy-last-account-v1');
+}
+function strategyAccuracy(strategy){
+ const policy=globalThis.QuantumAccuracy;
+ if(!policy)return null;
+ return policy.accuracy(state.journal||[],precisionAccountId(),state.market,state.mode,strategy);
+}
+function precisionText(metric){
+ if(!metric||metric.resolved===0)return 'لا توجد نتائج محسومة بعد';
+ return metric.win_rate_pct.toFixed(1)+'% ('+metric.wins+'/'+metric.resolved+' صفقات محسومة)';
+}
+function renderStrategyAccuracy(){
+ const policy=globalThis.QuantumAccuracy;
+ if(!policy)return;
+ const modeName=state.mode==='active'?'هجومي':'محافظ';
+ toText('accuracyScope',state.market+' • '+modeName);
+ const names=[['Trend Pullback','تصحيح الاتجاه'],['Mean Reversion','الارتداد الإحصائي'],['Compression Breakout','اختراق الانكماش']];
+ const host=el('accuracyStrategies');host.replaceChildren();
+ for(const [strategy,arabic] of names){
+   const metric=strategyAccuracy(strategy);
+   const item=document.createElement('div');item.className='accuracyItem';
+   const title=document.createElement('h4');title.textContent=strategy+' • '+arabic;
+   const number=document.createElement('div');number.className='accuracyPct';
+   number.textContent=metric&&metric.resolved?metric.win_rate_pct.toFixed(1)+'%':'—';
+   const count=document.createElement('div');count.className='accuracyCaption';
+   count.textContent=metric&&metric.resolved?
+     (metric.wins+'/'+metric.resolved+' صفقات محسومة • '+metric.losses+' وقف'):
+     'لا توجد صفقات محسومة في هذا النطاق';
+   const note=document.createElement('div');note.className='accuracyNote';
+   if(metric&&metric.resolved){
+     const label=metric.resolved<20?'عينة صغيرة جدًا':metric.resolved<50?'عينة محدودة':'نتائج وصفية';
+     note.textContent=label+' • نطاق تقريبي '+metric.ci_lower_pct.toFixed(1)+'–'+metric.ci_upper_pct.toFixed(1)+'%';
+   } else note.textContent='لا يمكن تقدير الدقة دون نتائج.';
+   item.append(title,number,count,note);host.append(item);
+ }
+ const current=(state.data?.markets||{})[state.market]?.decision||{};
+ const market=(state.data?.markets||{})[state.market]||{};
+ const isLive=!!market.analysis_ready && ['BUY','SELL'].includes(current.side) && !!current.strategy;
+ const metric=isLive?strategyAccuracy(current.strategy):null;
+ toText('signalAccuracy',isLive?
+  ('نجاح '+current.strategy+' السابق: '+precisionText(metric)+' — نسبة رصدية وليست احتمال نجاح هذا الدخول'):
+  'دقة الإشارة الحالية: — (WAIT أو بيانات غير مكتملة). راجع النتائج السابقة لكل استراتيجية أدناه.');
+}
+
 function renderJournal(){
  const hist=el('history');
  hist.replaceChildren();
@@ -427,6 +491,7 @@ function render(){
  sel.value=accounts.some(ac=>String(ac.id)===currentId)?currentId:'';
  if(!sel.value)sel.value='';
  syncJournal(data.signals||[]);
+ renderStrategyAccuracy();
  renderJournal();
  renderPerformance();
  attemptJournalRestore(data);
