@@ -188,7 +188,7 @@ class Monitor:
             health=memory['market_health'].get(market,{})
             # Only allow live exits after initial historical reconciliation,
             # so a restart cannot label an old TP/SL as a current tick hit.
-            if health.get('candles_loaded') and touched:
+            if health.get('candles_loaded') and getattr(app.state,'journal_tests_passed',False) and touched:
                 for updated in touched:
                     settle_on_quote(memory['history'],market,q.get('bid'),q.get('ask'),
                                     received,changed_side=updated,
@@ -487,7 +487,7 @@ async def discover_accounts():
 @app.get('/')
 async def index():return FileResponse(ROOT/'index.html')
 @app.get('/healthz')
-async def health():return {'ok':True,'service':'Quantum Simons','api_configured':bool(ID and SECRET)}
+async def health():return {'ok':True,'service':'Quantum Simons','api_configured':bool(ID and SECRET),'journal_tests_passed':getattr(app.state,'journal_tests_passed',False)}
 @app.get('/api/session')
 async def session(request:Request):
     try:require_owner(request);ok=True
@@ -671,6 +671,26 @@ async def telegram_toggle(data: TelegramToggle, request: Request):
         return {"ok": True, "telegram": telegram.toggle(data.enabled)}
     except TelegramError as e:
         raise HTTPException(400, str(e))
+
+
+@app.on_event('startup')
+async def run_journal_regression_tests():
+    """Small deterministic tests run on every deployment, no external accounts."""
+    import io
+    import unittest
+    output=io.StringIO()
+    try:
+        suite=unittest.defaultTestLoader.discover(
+            start_dir=str(ROOT/'tests'),pattern='test_paper_journal.py')
+        result=unittest.TextTestRunner(stream=output,verbosity=1).run(suite)
+        app.state.journal_tests_passed=bool(result.wasSuccessful() and result.testsRun>=7)
+        if app.state.journal_tests_passed:
+            logger.warning('Quantum Simons paper journal regression OK: %s tests',result.testsRun)
+        else:
+            logger.error('Quantum Simons paper journal regression failed: %s',output.getvalue()[-3500:])
+    except Exception:
+        app.state.journal_tests_passed=False
+        logger.exception('Quantum Simons paper journal regression runner failed')
 
 @app.on_event('shutdown')
 async def shutdown():
