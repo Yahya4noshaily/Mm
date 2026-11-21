@@ -7,8 +7,8 @@ const recent='2026-11-21T02:21:51.000Z';
 const old='2026-11-21T01:50:00.000Z';
 const first={id:'abcdef123456',market:'BTCUSD',side:'BUY',status:'STOP',created_at:old};
 const second={id:'abcdef123457',market:'BTCUSD',side:'BUY',status:'STOP',created_at:old};
-const fresh={id:'abcdef123458',market:'BTCUSD',side:'BUY',status:'OPEN',created_at:recent};
-const goodMarket={BTCUSD:{analysis_ready:true,decision:{id:fresh.id,side:'BUY'}}};
+const fresh={id:'abcdef123458',market:'BTCUSD',side:'BUY',status:'OPEN',created_at:recent,valid_until:'2026-11-21T02:22:35.000Z',entry:103.3,zone_lower:102,zone_upper:104};
+const goodMarket={BTCUSD:{analysis_ready:true,quote:{bid:103.2,ask:103.3},decision:{id:fresh.id,side:'BUY'}}};
 const waitMarket={BTCUSD:{analysis_ready:true,decision:{side:'WAIT'}}};
 
 test('first page load never re-alerts old history',()=>{
@@ -53,4 +53,11 @@ test('seen ID store has a bounded size',()=>{
   const known=Array.from({length:600},(_,i)=>i.toString(16).padStart(12,'0'));
   const result=nextAlertState([],{},known,true,now);
   assert.equal(result.ids.length,300);
+});
+
+test('expired validity, missing validity, and quote outside zone never alert',()=>{
+  assert.equal(nextAlertState([{...fresh,valid_until:undefined}],goodMarket,[],true,now).alerts.length,0);
+  assert.equal(nextAlertState([{...fresh,valid_until:'2026-11-21T02:21:59Z'}],goodMarket,[],true,now).alerts.length,0);
+  const far={BTCUSD:{analysis_ready:true,quote:{bid:110,ask:110.2},decision:{id:fresh.id,side:'BUY'}}};
+  assert.equal(nextAlertState([fresh],far,[],true,now).alerts.length,0);
 });
