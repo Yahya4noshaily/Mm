@@ -34,10 +34,18 @@
       const created=Date.parse(rec.created_at);
       const age=now-created;
       if(!Number.isFinite(age)||age<0||age>MAX_AGE_MS)continue;
+      const expiry=Date.parse(rec.valid_until);
+      // Legacy journal records without a 45-second entry window are NOT
+      // actionable alerts. Only new zone-confirmed records can notify.
+      if(!Number.isFinite(expiry)||now>expiry||expiry-created>60000)continue;
       const status=(marketStatus||{})[rec.market]||{};
       const decision=status.decision||{};
-      // A journal BUY is not an immediate BUY if the scanner says WAIT.
       if(!status.analysis_ready||decision.id!==id||decision.side!==rec.side)continue;
+      const quote=status.quote||{};
+      const executable=rec.side==='BUY'?Number(quote.ask):Number(quote.bid);
+      const low=Number(rec.zone_lower),high=Number(rec.zone_upper);
+      if(!Number.isFinite(executable)||!Number.isFinite(low)||!Number.isFinite(high)
+         ||executable<=0||low>=high||executable<low||executable>high)continue;
       notifications.push(rec);
     }
     const ids=Array.from(seen).slice(-MAX_SEEN);
