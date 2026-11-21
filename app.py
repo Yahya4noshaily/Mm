@@ -25,6 +25,7 @@ from telegram_alerts import TelegramAlerts, TelegramError
 from session_store import COOKIE_NAME, attach_cookie, deserialize_auth, delete_cookie
 from paper_journal import update_paper_journal, sanitize_client_backup, settle_on_quote, compute_performance
 from scan_scheduler import can_start_scan, note_scan_attempt, note_scan_success, note_scan_failure, scan_diagnostics
+from connection_health import CTraderApiError, retry_delay_seconds, user_status, HISTORICAL_RATE_LIMITS
 
 app=FastAPI(title='Quantum Simons',docs_url=None,redoc_url=None)
 logger=logging.getLogger('quantum-simons')
@@ -42,7 +43,7 @@ memory={
  'token':None,'refresh_token':None,'token_expires':0,
  'accounts':[],'selected_account':None,'oauth_state':None,
  'connected':False,'error':'لم يتم ربط cTrader بعد',
- 'phase':'idle','market_health':{},
+ 'phase':'idle','market_health':{},'upstream':None,
  'mode':'active','history':[],'quotes':{},'candles':{},
  'decisions':{'XAUUSD':{'side':'WAIT','reason':'بانتظار الاتصال'},'BTCUSD':{'side':'WAIT','reason':'بانتظار الاتصال'}},
  'symbols':{},'last_seen':{},'last_signal_ts':{},'last_eval':{},
@@ -74,6 +75,7 @@ class CTrader:
         self.pending={}
         self.receiver=None
         self.heartbeat_task=None
+        self.history_cooldown_until=0.0
         self.on_event=on_event
     async def open(self):
         self.ws=await websockets.connect('wss://'+self.endpoint+'.ctraderapi.com:5036/',
@@ -96,6 +98,9 @@ class CTrader:
 
     async def request(self,kind,payload,timeout=18):
         if not self.ws:raise RuntimeError('No cTrader connection')
+        if kind==2137 and time.time()<self.history_cooldown_until:
+            remaining=self.history_cooldown_until-time.time()
+            raise CTraderApiError(kind,{'errorCode':'BLOCKED_PAYLOAD_TYPE','retryAfter':remaining})
         mid=uuid.uuid4().hex
         fut=asyncio.get_running_loop().create_future()
         self.pending[mid]=fut
@@ -105,7 +110,11 @@ class CTrader:
             response=await asyncio.wait_for(fut,timeout)
             if response.get('payloadType') in (50,2142):
                 p=response.get('payload') or {}
-                raise RuntimeError(str(p.get('errorCode','API error')))
+                error=CTraderApiError(kind,p)
+                if kind==2137 and error.code in HISTORICAL_RATE_LIMITS:
+                    delay=retry_delay_seconds(error.code,1,error.retry_after,error.maintenance_until)
+                    self.history_cooldown_until=max(self.history_cooldown_until,time.time()+delay)
+                raise error
             return response.get('payload',{}) or {}
         finally:self.pending.pop(mid,None)
     async def read_loop(self):
@@ -224,6 +233,11 @@ class Monitor:
             code=raw if re.fullmatch(r'[A-Z0-9_:-]{2,80}',raw) else type(exc).__name__
             reason='خطأ بيانات cTrader: '+code
             note_scan_failure(health,time.time(),reason)
+            if isinstance(exc,CTraderApiError) and exc.code in HISTORICAL_RATE_LIMITS:
+                delay=retry_delay_seconds(exc.code,1,exc.retry_after,exc.maintenance_until)
+                health['next_retry_at']=max(health['next_retry_at'],time.time()+delay)
+                reason=user_status(exc.code)
+                health['analysis_error']=reason
             health['scan_duration_ms']=round((time.time()-started)*1000)
             memory['decisions'][market]={'side':'WAIT','reason':reason+'؛ إعادة المحاولة خلال ثوانٍ','market':market}
             logger.warning('Market scan %s failed: %s; attempt=%d of 3',
@@ -246,9 +260,13 @@ class Monitor:
             health['scan_inflight']=False
 
     async def start(self):
+        failure_streak=0
         while True:
+            delay=5
             try:
                 await self.connect_one()
+                failure_streak=0
+                memory['upstream']=None
                 while True:
                     if not self.conn or not self.conn.ws or self.conn.receiver.done():
                         raise ConnectionError('cTrader socket reader stopped')
@@ -272,10 +290,20 @@ class Monitor:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
+                failure_streak+=1
                 raw=str(exc).strip()
-                tag=raw if re.fullmatch(r'[A-Z0-9_:-]{2,80}',raw) else type(exc).__name__
-                logger.warning('cTrader monitor reconnect: %s',tag)
-                memory['error']='جاري إعادة اتصال cTrader: '+tag
+                tag=exc.code if isinstance(exc,CTraderApiError) else (raw if re.fullmatch(r'[A-Z0-9_:-]{2,80}',raw) else type(exc).__name__)
+                delay=retry_delay_seconds(
+                    tag,failure_streak,
+                    getattr(exc,'retry_after',0),
+                    getattr(exc,'maintenance_until',0))
+                logger.warning('cTrader monitor reconnect: %s; retry after %ss',tag,delay)
+                memory['error']=user_status(tag)
+                last=memory.get('upstream') or {}
+                memory['upstream']={'code':tag,'since':last.get('since') if last.get('code')==tag else time.time(),
+                                    'next_retry_at':time.time()+delay,
+                                    'retry_in_seconds':delay,'consecutive_failures':failure_streak}
+                memory['phase']='upstream_unavailable'
             finally:
                 tasks=list(self.scan_tasks.values())
                 for task in tasks:
@@ -285,14 +313,15 @@ class Monitor:
                     await asyncio.gather(*tasks,return_exceptions=True)
                 self.scan_tasks.clear()
                 memory['connected']=False
-                memory['phase']='reconnecting'
+                if memory['phase']!='upstream_unavailable':
+                    memory['phase']='reconnecting'
                 for market in ('XAUUSD','BTCUSD'):
-                    memory['decisions'][market]={'side':'WAIT','reason':'جارٍ إعادة اتصال cTrader'}
+                    memory['decisions'][market]={'side':'WAIT','reason':memory['error'] if memory['upstream'] else 'جارٍ إعادة اتصال cTrader'}
                     memory['market_health'].setdefault(market,{})['spot_subscribed']=False
                 if self.conn:
                     await self.conn.close()
                 self.conn=None
-            await asyncio.sleep(5)
+            await asyncio.sleep(delay)
 
     async def connect_one(self):
         endpoint='live' if self.account['isLive'] else 'demo'
@@ -352,6 +381,7 @@ class Monitor:
                 memory['market_health'][market]['candles_loaded']=False
                 memory['market_health'][market]['analysis_error']='جارٍ إعادة تحميل شموع '+market
         memory['phase']='monitoring'
+        memory['upstream']=None
         memory['error']=None
         logger.info('cTrader authenticated and spot feeds subscribed: %s',','.join(subscribed))
     async def update_market(self,market):
@@ -543,7 +573,7 @@ async def session(request:Request):
     return {'authenticated':ok,'password_configured':bool(OWNER_PASSWORD),
         'api_configured':bool(ID and SECRET),
         'redirect_uri':(PUBLIC_URL+'/api/oauth/callback') if PUBLIC_URL else 'Set PUBLIC_URL',
-        'version':'1.3.0'}
+        'version':'1.3.1'}
 @app.post('/api/login')
 async def login(payload:OwnerLogin,request:Request):
     require_origin(request)
@@ -579,7 +609,7 @@ async def status(request:Request):
         elif memory['connected']:
             status_text='اتصال cTrader قائم؛ لا توجد تسعيرات جديدة لهذا السوق'
         else:
-            status_text='اتصال cTrader يعيد المحاولة أو متوقف'
+            status_text=memory.get('error') or 'اتصال cTrader يعيد المحاولة أو متوقف'
         market_data[market]={
             'quote_fresh':quote_fresh,'candle_fresh':candle_fresh,
             'analysis_ready':analysis_ready,'status_text':status_text,
@@ -595,6 +625,7 @@ async def status(request:Request):
             'symbol':memory['symbols'].get(market),
             'spark':[round(b['c'],5) for b in memory['candles'].get(market,{}).get('1',[])[-40:]]}
     payload={'connected':memory['connected'],'phase':memory['phase'],'error':memory['error'],
+        'upstream':memory.get('upstream'),
         'server_instance_id':SERVER_INSTANCE_ID,
         'authenticated_to_ctrader':bool(memory['token']),
         'account':memory['selected_account'],'accounts':memory['accounts'],

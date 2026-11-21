@@ -17,7 +17,7 @@
 <div class="intro"><div><div class="pill" style="display:inline-block">نسخة مستقلة • إشارات فقط</div><h1>اقرأ السوق <span>بالأرقام،<br>لا بالتخمين.</span></h1><p>لوحة كمية تجمع ارتداد السعر إلى المتوسط وتصحيح الاتجاه والاختراق بعد الانكماش. التحليل يعتمد على بيانات cTrader الحقيقية عند الربط، ولا يتضمن خوارزميات Jim Simons السرية.</p></div><div class="tiny">إشارات على M1 • تأكيد الاتجاه على M5<br>بدون تنفيذ صفقات آلية</div></div>
 <section id="login" class="panel login hidden"><h2>🔐 دخول مالك الموقع</h2><p class="fine">الموقع محمي بكلمة المرور الخاصة به، ولا نستخدم كلمة مرور حساب التداول.</p><form id="loginForm"><input id="password" type="password" placeholder="كلمة مرور الموقع" autocomplete="current-password" required><button class="btn main" type="submit">دخول اللوحة</button></form><p id="loginError" class="error"></p></section>
 <main id="dashboard" class="hidden">
-<div style="display:flex;gap:9px;flex-wrap:wrap"><span id="message" class="chip off">بانتظار الاتصال</span><span class="chip">v1.3 • ماسح محسن • نفس الاستراتيجيات</span></div>
+<div style="display:flex;gap:9px;flex-wrap:wrap"><span id="message" class="chip off">بانتظار الاتصال</span><span class="chip">v1.3.1 • إصلاح الاتصال • الاستراتيجيات ثابتة</span></div>
 <div class="buttons" id="markets"><button class="btn selected" type="button" data-market="XAUUSD">🥇 الذهب XAUUSD</button><button class="btn" type="button" data-market="BTCUSD">₿ بيتكوين BTCUSD</button></div>
 <div class="layout">
 <section class="panel signal-card"><div><div class="label">الإشارة الحالية • <b id="marketName">XAUUSD</b></div><div id="signal" class="side wait">WAIT</div><div id="reason" class="reason">لن تظهر أي إشارة قبل اكتمال اتصال cTrader واستلام بيانات الشموع والأسعار الفعلية.</div><div id="lastSignalInfo" class="fine lastSignalInfo">آخر إشارة محفوظة: لا توجد إشارات بعد. الإشارات القديمة لا تُعد أمر دخول الآن.</div></div><div><div id="strategy" class="fine" style="margin-bottom:15px">الاستراتيجية: —</div><div class="summary"><div><label>منطقة الدخول</label><b id="entry">—</b></div><div><label>وقف تجريبي</label><b id="stop">—</b></div><div><label>هدف تجريبي</label><b id="target">—</b></div></div></div></section>
@@ -392,10 +392,10 @@ function render(){
  const ready=!!m.analysis_ready;
  const connected=!!data.connected;
  const current=(m.decision||{side:'WAIT',reason:'جارٍ تهيئة التحليل'});
- const connectionLabel=ready?'● cTrader مباشر • التحليل جاهز':fresh?'● السعر مباشر • التحليل يُجهّز':connected?'● cTrader متصل':data.phase==='idle'?'● يحتاج إعادة ربط':data.phase==='starting'||data.phase==='reconnecting'||data.phase==='restoring'?'● جارٍ استعادة الاتصال':'● غير متصل';
+ const connectionLabel=ready?'● cTrader مباشر • التحليل جاهز':fresh?'● السعر مباشر • التحليل يُجهّز':connected?'● cTrader متصل':data.phase==='upstream_unavailable'?'● تعذّر الاتصال بخادم cTrader':data.phase==='idle'?'● يحتاج إعادة ربط':data.phase==='starting'||data.phase==='reconnecting'||data.phase==='restoring'?'● جارٍ استعادة الاتصال':'● غير متصل';
  el('connection').textContent=connectionLabel;
  el('connection').className='chip '+(fresh?'on':'off');
- el('message').textContent=ready?'التحليل يعمل على بيانات حقيقية':((data.phase==='idle'||data.phase==='needs_authorization'||data.phase==='needs_account')?(data.error||'يلزم ربط حساب cTrader من الإعدادات'):(m.status_text||data.error||'جارٍ الاتصال بالسوق'));
+ el('message').textContent=ready?'التحليل يعمل على بيانات حقيقية':(!connected && data.error ? data.error : ((data.phase==='idle'||data.phase==='needs_authorization'||data.phase==='needs_account')?(data.error||'يلزم ربط حساب cTrader من الإعدادات'):(m.status_text||data.error||'جارٍ الاتصال بالسوق')));
  const side=ready?(current.side||'WAIT'):'WAIT';
  toText('marketName',state.market);toText('signal',side);
  el('signal').className='side '+side.toLowerCase();
@@ -420,7 +420,7 @@ function render(){
  toText('lastScan',scanner.last_scan_success_at?new Date(scanner.last_scan_success_at*1000).toLocaleTimeString('ar-SA',{timeZone:'Asia/Riyadh'}):'لم يكتمل بعد');
  toText('lastBarAge',scanner.bar_age_seconds!=null?scanner.bar_age_seconds+' ثانية':'غير متوفر');
  toText('scannerCounts',(scanner.scan_attempts||0)+' / '+(scanner.scan_failures||0));
- toText('scannerInfo',scanner.last_scan_error_code?('آخر خطأ: '+scanner.last_scan_error_code+' — إعادة المحاولة تلقائيًا'):(scanner.reason||m.status_text||'بانتظار أول فحص'));
+ toText('scannerInfo',!connected && data.upstream?.code?('cTrader: '+data.upstream.code+' • إعادة المحاولة خلال '+(data.upstream.retry_in_seconds||'—')+' ثانية، دون إصدار إشارات'):(scanner.last_scan_error_code?('آخر خطأ: '+scanner.last_scan_error_code+' — إعادة المحاولة تلقائيًا'):(scanner.reason||m.status_text||'بانتظار أول فحص')));
  const accounts=data.accounts||[];const sel=el('account'),currentId=String(data.account?.id||sel.value||'');
  sel.replaceChildren(new Option('اختر الحساب بعد الربط',''));
  for(const ac of accounts)sel.add(new Option((ac.brokerTitle||'cTrader')+' • '+(ac.isLive?'حقيقي':'تجريبي')+' • '+ac.id,ac.id));
