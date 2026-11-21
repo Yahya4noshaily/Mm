@@ -78,7 +78,7 @@ def assess_watch(w,bars_m1,bid,ask,now,spread):
         return {"action":"WAIT","reason":"بانتظار Bid/Ask صالحين"}
     if (side=="SELL" and ask>=stop) or (side=="BUY" and bid<=stop):
         return {"action":"CANCEL","reason":"وصل السعر إلى مستوى الإلغاء قبل تأكيد الدخول؛ لا تدخل"}
-    if spread>max(1.7*float(w["reference_spread"]),0.17*original_risk):
+    if spread>max(1.7*float(w["reference_spread"]),0.05*original_risk):
         return {"action":"WAIT","reason":"توسع السبريد؛ يمنع الدخول رغم اكتمال التحليل"}
     if now-created<MIN_OBSERVATION_SECONDS:
         return {"action":"WAIT","reason":"انتظار اختبار المنطقة بعد إشارة التحليل الأصلية"}
