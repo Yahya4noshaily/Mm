@@ -12,16 +12,25 @@
 .scannerDiag{background:#0b2535;border:1px solid #2a4353;border-radius:12px;padding:12px}.scannerDiag .chip{padding:5px 9px;font-size:10px}.scannerDiag b{color:var(--text)}#scannerInfo{margin-top:5px;color:var(--gold)}
 .lastSignalInfo{border-top:1px solid var(--stroke);margin-top:12px;padding-top:11px;line-height:1.8;color:var(--gold);font-size:12px}
 .signalAccuracy{padding:9px 11px;margin-bottom:13px;background:#0b2936;border:1px solid var(--stroke);border-radius:9px;color:var(--gold);line-height:1.7}.accuracyStrategies{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:13px}.accuracyItem{padding:13px 11px;background:#0a2535;border:1px solid var(--stroke);border-radius:13px;min-width:0}.accuracyItem h4{font-size:12px;margin:0 0 7px}.accuracyPct{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--text);direction:ltr;text-align:right}.accuracyCaption{font-size:11px;line-height:1.65;color:var(--muted)}.accuracyNote{font-size:11px;line-height:1.7;color:var(--gold);margin-top:6px}@media(max-width:600px){.accuracyStrategies{grid-template-columns:1fr}.accuracyItem{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px}.accuracyItem h4{grid-column:1/-1}.accuracyPct{text-align:right;font-size:24px}.accuracyCaption{align-self:center}}
+.entryWatch{background:#132c3b;border:1px solid #bc9958;border-radius:12px;padding:13px;margin:10px 0;color:#f1d6a8}.entryWatchTitle{font-size:13px;font-weight:800;margin-bottom:5px}.entryWatchDirection{font-size:12px;color:var(--muted)}.entryWatchRange{font-size:21px;font-variant-numeric:tabular-nums;font-weight:800;margin:5px 0;text-align:right}.entryWatch .fine{line-height:1.8}.entryValidity{padding:10px 12px;border:1px solid #3e9d84;border-radius:10px;background:#11352f;color:var(--mint);font-size:12px;line-height:1.8;margin:7px 0}.hidden{display:none!important}
 </style></head>
 <body><div class="wrap">
 <header class="head"><div class="brand"><div class="logo">∑</div><div><div class="over">QUANTITATIVE SIGNALS</div><strong>QUANTUM SIMONS</strong></div></div><div id="connection" class="chip off">● غير متصل</div></header>
 <div class="intro"><div><div class="pill" style="display:inline-block">نسخة مستقلة • إشارات فقط</div><h1>اقرأ السوق <span>بالأرقام،<br>لا بالتخمين.</span></h1><p>لوحة كمية تجمع ارتداد السعر إلى المتوسط وتصحيح الاتجاه والاختراق بعد الانكماش. التحليل يعتمد على بيانات cTrader الحقيقية عند الربط، ولا يتضمن خوارزميات Jim Simons السرية.</p></div><div class="tiny">إشارات على M1 • تأكيد الاتجاه على M5<br>بدون تنفيذ صفقات آلية</div></div>
 <section id="login" class="panel login hidden"><h2>🔐 دخول مالك الموقع</h2><p class="fine">الموقع محمي بكلمة المرور الخاصة به، ولا نستخدم كلمة مرور حساب التداول.</p><form id="loginForm"><input id="password" type="password" placeholder="كلمة مرور الموقع" autocomplete="current-password" required><button class="btn main" type="submit">دخول اللوحة</button></form><p id="loginError" class="error"></p></section>
 <main id="dashboard" class="hidden">
-<div style="display:flex;gap:9px;flex-wrap:wrap"><span id="message" class="chip off">بانتظار الاتصال</span><span class="chip">v1.4 • دقة الاستراتيجيات • القواعد ثابتة</span></div>
+<div style="display:flex;gap:9px;flex-wrap:wrap"><span id="message" class="chip off">بانتظار الاتصال</span><span class="chip">v1.5 • منطقة دخول مؤكدة • القواعد محفوظة</span></div>
 <div class="buttons" id="markets"><button class="btn selected" type="button" data-market="XAUUSD">🥇 الذهب XAUUSD</button><button class="btn" type="button" data-market="BTCUSD">₿ بيتكوين BTCUSD</button></div>
 <div class="layout">
-<section class="panel signal-card"><div><div class="label">الإشارة الحالية • <b id="marketName">XAUUSD</b></div><div id="signal" class="side wait">WAIT</div><div id="reason" class="reason">لن تظهر أي إشارة قبل اكتمال اتصال cTrader واستلام بيانات الشموع والأسعار الفعلية.</div><div id="lastSignalInfo" class="fine lastSignalInfo">آخر إشارة محفوظة: لا توجد إشارات بعد. الإشارات القديمة لا تُعد أمر دخول الآن.</div></div><div><div id="strategy" class="fine" style="margin-bottom:10px">الاستراتيجية: —</div>
+<section class="panel signal-card"><div><div class="label">الإشارة الحالية • <b id="marketName">XAUUSD</b></div><div id="signal" class="side wait">WAIT</div><div id="reason" class="reason">لن تظهر أي إشارة قبل اكتمال اتصال cTrader واستلام بيانات الشموع والأسعار الفعلية.</div>
+<div id="entryWatch" class="entryWatch hidden" aria-live="polite">
+  <div class="entryWatchTitle">⏳ رصدت فرصة تحليلية — لا تدخل الآن</div>
+  <div id="entryWatchDirection" class="entryWatchDirection">—</div>
+  <div id="entryWatchRange" class="entryWatchRange" dir="ltr">—</div>
+  <div id="entryWatchInfo" class="fine">انتظار إعادة اختبار المنطقة وشمعة رفض جديدة.</div>
+</div>
+<div id="entryValidity" class="entryValidity hidden">—</div>
+<div id="lastSignalInfo" class="fine lastSignalInfo">آخر إشارة محفوظة: لا توجد إشارات بعد. الإشارات القديمة لا تُعد أمر دخول الآن.</div></div><div><div id="strategy" class="fine" style="margin-bottom:10px">الاستراتيجية: —</div>
 <div id="signalAccuracy" class="fine signalAccuracy">نسبة النجاح السابقة لاستراتيجية الإشارة: — (لا توجد إشارة حالية)</div><div class="summary"><div><label>منطقة الدخول</label><b id="entry">—</b></div><div><label>وقف تجريبي</label><b id="stop">—</b></div><div><label>هدف تجريبي</label><b id="target">—</b></div></div></div></section>
 <section class="panel"><h3 class="stats-title">📡 بيانات السوق</h3><div class="stats"><div class="stat"><label>Ask (شراء)</label><b id="ask">—</b></div><div class="stat"><label>Bid (بيع)</label><b id="bid">—</b></div><div class="stat"><label>Spread</label><b id="spread">—</b></div><div class="stat"><label>عمر السعر</label><b id="latency">—</b></div></div><svg id="spark" class="spark" viewBox="0 0 320 70" preserveAspectRatio="none" role="img" aria-label="إغلاقات آخر 40 شمعة مكتملة"><path id="sparkPath" d="" fill="none" stroke="#55dbb8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><div class="spark-label">آخر 40 إغلاق M1 من cTrader</div><div class="line"></div><div class="tiny">الشموع المكتملة: <b id="bars">M1 — · M5 —</b><br>آخر سعر فعلي: <span id="lastTime">—</span></div>
 <div class="scannerDiag" aria-live="polite" style="margin-top:13px">
@@ -464,6 +473,17 @@ function render(){
  toText('marketName',state.market);toText('signal',side);
  el('signal').className='side '+side.toLowerCase();
  toText('reason',ready?(current.reason||'لا توجد فرصة مؤهلة'):(m.analysis_error||m.status_text||data.error||'بيانات غير مكتملة؛ لا إشارات.'));
+ const watch=m.entry_watch||null;
+ el('entryWatch').classList.toggle('hidden',!watch);
+ if(watch){
+   toText('entryWatchDirection',(watch.side==='SELL'?'منطقة البيع الأفضل':'منطقة الشراء الأفضل')+' • '+(watch.strategy||''));
+   toText('entryWatchRange',format(watch.zone_lower)+' — '+format(watch.zone_upper));
+   toText('entryWatchInfo','الوقف المبدئي '+format(watch.stop)+' • انتهاء الترصد '+localTime(watch.expires_at)+' • لا تدخل قبل تأكيد شمعة M1 وظهور BUY/SELL جديدة.');
+ }
+ const isNewEntry=ready&&['BUY','SELL'].includes(side)&&current.valid_until;
+ el('entryValidity').classList.toggle('hidden',!isNewEntry);
+ if(isNewEntry)toText('entryValidity','✅ دخول مؤكّد داخل '+format(current.zone_lower)+' — '+format(current.zone_upper)+' • صلاحية حتى '+localTime(current.valid_until)+' • لا تطارد السعر إذا خرج من النطاق.');
+
  const recent=(data.signals||[]).find(rec=>rec&&rec.market===state.market&&(!data.account?.id||!rec.account_id||String(rec.account_id)===String(data.account.id)));
  const statusLabel={OPEN:'قيد المتابعة',TARGET:'الهدف تحقق نظريًا',STOP:'الوقف تحقق نظريًا',UNVERIFIED:'غير مؤكدة'};
  toText('lastSignalInfo',recent?
