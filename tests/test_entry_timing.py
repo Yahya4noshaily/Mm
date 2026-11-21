@@ -9,7 +9,7 @@ BUY={"side":"BUY","strategy":"Trend Pullback","reason":"تصحيح صاعد",
      "entry":100.0,"stop":90.0,"target":113.0,"rr":1.3,"bar_time":BAR}
 def bar(t,o,h,l,c):return {"t":t,"o":o,"h":h,"l":l,"c":c}
 def bearish():return bar(BAR+60000,104.2,105,102,103.2)
-def bullish():return bar(BAR+60000,95.3,97.2,95,96.8)
+def bullish():return bar(BAR+60000,96.0,97.8,95.0,97.35)
 
 class EntryTimingTests(unittest.TestCase):
     def sell(self):
@@ -33,7 +33,7 @@ class EntryTimingTests(unittest.TestCase):
         self.assertIn("valid_until",s)
     def test_confirmed_buy_retest_improves_entry(self):
         w=self.buy();self.assertIsNotNone(w)
-        out=assess_watch(w,[bullish()],96.6,96.8,START+130,.2)
+        out=assess_watch(w,[bullish()],97.15,97.35,START+130,.2)
         self.assertEqual(out["action"],"READY")
         self.assertLess(out["signal"]["entry"],BUY["entry"])
         self.assertEqual(out["signal"]["stop"],BUY["stop"])
