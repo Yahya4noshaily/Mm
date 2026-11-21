@@ -27,6 +27,7 @@ from paper_journal import update_paper_journal, sanitize_client_backup, settle_o
 from scan_scheduler import can_start_scan, note_scan_attempt, note_scan_success, note_scan_failure, scan_diagnostics
 from connection_health import CTraderApiError, retry_delay_seconds, user_status, HISTORICAL_RATE_LIMITS
 from historical_accuracy import accuracy_snapshot
+from entry_timing import create_watch, assess_watch, public_watch, still_actionable
 
 app=FastAPI(title='Quantum Simons',docs_url=None,redoc_url=None)
 logger=logging.getLogger('quantum-simons')
@@ -48,6 +49,7 @@ memory={
  'mode':'active','history':[],'quotes':{},'candles':{},
  'decisions':{'XAUUSD':{'side':'WAIT','reason':'بانتظار الاتصال'},'BTCUSD':{'side':'WAIT','reason':'بانتظار الاتصال'}},
  'symbols':{},'last_seen':{},'last_signal_ts':{},'last_eval':{},
+ 'pending_watch':{},'setup_block_until':{},
 }
 worker=None
 auth_lock=asyncio.Lock()
@@ -206,6 +208,25 @@ class Monitor:
                     settle_on_quote(memory['history'],market,q.get('bid'),q.get('ask'),
                                     received,changed_side=updated,
                                     account_id=self.account['id'])
+            watch=memory['pending_watch'].get(market)
+            if watch and q.get('bid') and q.get('ask'):
+                check=assess_watch(watch,None,q['bid'],q['ask'],
+                                   received,q['ask']-q['bid'])
+                if check['action']=='CANCEL':
+                    memory['pending_watch'].pop(market,None)
+                    memory['setup_block_until'][market]=received+180
+                    memory['decisions'][market]={
+                        'side':'WAIT','market':market,
+                        'reason':'ألغيت منطقة الدخول: '+check['reason']}
+            active_decision=memory['decisions'].get(market,{})
+            if active_decision.get('side') in ('BUY','SELL'):
+                active=next((x for x in memory['history']
+                    if x.get('id')==active_decision.get('id')),None)
+                if not active or active.get('status')!='OPEN' or not still_actionable(
+                    active_decision,q.get('bid'),q.get('ask'),received):
+                    memory['decisions'][market]={
+                      'side':'WAIT','market':market,
+                      'reason':'انتهت صلاحية الدخول أو ابتعد السعر؛ لا تطارد إشارة قديمة'}
     async def bars(self,market,period):
         symbol_id=memory['symbols'][market]['symbolId']
         now=time.time();lookback=86400*3 if period==1 else 86400*9
@@ -314,6 +335,7 @@ class Monitor:
                     await asyncio.gather(*tasks,return_exceptions=True)
                 self.scan_tasks.clear()
                 memory['connected']=False
+                memory['pending_watch'].clear()
                 if memory['phase']!='upstream_unavailable':
                     memory['phase']='reconnecting'
                 for market in ('XAUUSD','BTCUSD'):
@@ -330,6 +352,7 @@ class Monitor:
         memory['connected']=False
         memory['market_health']={}
         memory['quotes']={}
+        memory['pending_watch'].clear()
         self.conn=CTrader(endpoint,self.on_event)
         await self.conn.open()
         await self.conn.request(2102,{
@@ -401,36 +424,84 @@ class Monitor:
             memory['decisions'][market]={'side':'WAIT','reason':'شموع M1 ليست حديثة؛ السوق مغلق أو التاريخ متأخر'}
             memory['market_health'].setdefault(market,{})['last_analysis_at']=now
             return
-        result=signal(bars1,bars5,q.get('bid'),q.get('ask'),list(self.spreads[market])[:-1],memory['mode'])
-        result['market']=market
-        if result['side'] in ('BUY','SELL'):
-            last=memory['last_signal_ts'].get(market,0)
-            t=bars1[-1]['t'] if bars1 else 0
-            if t==last or time.time()-last/1000<180:
-                result={'side':'WAIT','reason':'فترة منع تكرار الإشارات','market':market}
+        # The strategy engine is unchanged. BUY/SELL from it is ANALYSIS only.
+        raw=signal(bars1,bars5,q.get('bid'),q.get('ask'),
+                   list(self.spreads[market])[:-1],memory['mode'])
+        raw['market']=market
+        watch=memory['pending_watch'].get(market)
+        if watch and watch['account_id']!=int(self.account['id']):
+            memory['pending_watch'].pop(market,None)
+            watch=None
+        if watch:
+            if raw.get('side') in ('BUY','SELL') and raw['side']!=watch['side']:
+                memory['pending_watch'].pop(market,None)
+                memory['setup_block_until'][market]=now+180
+                memory['decisions'][market]={
+                    'side':'WAIT','market':market,
+                    'reason':'منطقة الدخول ألغيت: ظهرت إشارة تحليل معاكسة'}
             else:
-                result['id']=uuid.uuid4().hex[:12]
-                result['created_at']=datetime.now(timezone.utc).isoformat()
-                result['account_id']=int(self.account['id'])
-                result['status']='OPEN'
-                result['mode']=memory['mode']
-                result['risk_pct']=PRESETS[memory['mode']]['risk_pct']
-                result['checked_bar_time']=t
-                result['closed_at']=None
-                result['exit_price']=None
-                result['result_r']=None
-                memory['last_signal_ts'][market]=t
-                result['mode_label']=PRESETS[memory['mode']]['label']
-                # Descriptive success rate measured BEFORE this signal enters the journal.
-                # Does not affect BUY/SELL/WAIT or any threshold in engine.py.
-                result['accuracy_at_issue']=accuracy_snapshot(
-                    memory['history'],int(self.account['id']),market,memory['mode'],result['strategy'])
-                memory['history'].insert(0,result.copy())
-                memory['history']=memory['history'][:200]
-                # Notify only real, unique BUY/SELL signals, never WAIT.
-                asyncio.create_task(telegram.send_signal(result.copy()))
-        memory['decisions'][market]=result
-        memory['market_health'].setdefault(market,{})['last_analysis_at']=time.time()
+                verdict=assess_watch(watch,bars1,q['bid'],q['ask'],now,
+                                     q['ask']-q['bid'])
+                if verdict['action']=='READY':
+                    last=int(memory['last_signal_ts'].get(market,0))
+                    if now-last/1000>=180:
+                        record=verdict['signal']
+                        record['id']=uuid.uuid4().hex[:12]
+                        record['created_at']=datetime.now(timezone.utc).isoformat()
+                        record['account_id']=int(self.account['id'])
+                        record['mode']=watch['mode']
+                        record['mode_label']=PRESETS[watch['mode']]['label']
+                        record['risk_pct']=PRESETS[watch['mode']]['risk_pct']
+                        record['status']='OPEN'
+                        record['checked_bar_time']=record['bar_time']
+                        record['closed_at']=None
+                        record['exit_price']=None
+                        record['result_r']=None
+                        record['accuracy_at_issue']=accuracy_snapshot(
+                           memory['history'],int(self.account['id']),market,
+                           watch['mode'],record['strategy'])
+                        memory['last_signal_ts'][market]=record['bar_time']
+                        memory['history'].insert(0,record.copy())
+                        memory['history']=memory['history'][:200]
+                        memory['pending_watch'].pop(market,None)
+                        memory['decisions'][market]=record
+                        memory['market_health'].setdefault(market,{})['last_analysis_at']=now
+                        asyncio.create_task(telegram.send_signal(record.copy()))
+                        return
+                    verdict={'action':'CANCEL','reason':'فترة تهدئة بعد إشارة سابقة'}
+                if verdict['action']=='CANCEL':
+                    memory['pending_watch'].pop(market,None)
+                    memory['setup_block_until'][market]=now+180
+                    memory['decisions'][market]={
+                        'side':'WAIT','market':market,
+                        'reason':'منطقة الدخول ألغيت: '+verdict['reason']}
+                else:
+                    memory['decisions'][market]={
+                        'side':'WAIT','market':market,'stage':'WATCH',
+                        'strategy':watch['strategy'],
+                        'reason':'ترقّب فقط • '+verdict['reason']}
+            memory['market_health'].setdefault(market,{})['last_analysis_at']=now
+            return
+        if raw.get('side') in ('BUY','SELL'):
+            last=int(memory['last_signal_ts'].get(market,0))
+            if now<float(memory['setup_block_until'].get(market,0)) or now-last/1000<180:
+                raw={'side':'WAIT','market':market,
+                     'reason':'فترة تهدئة بعد إشارة أو منطقة ملغاة'}
+            else:
+                pending=create_watch(
+                    raw,market,memory['mode'],int(self.account['id']),now,
+                    q['ask']-q['bid'])
+                if pending:
+                    memory['pending_watch'][market]=pending
+                    raw={'side':'WAIT','market':market,'stage':'WATCH',
+                         'strategy':pending['strategy'],
+                         'reason':'إشارة تحليل '+pending['side']+
+                         '، لكن الدخول مؤجل حتى إعادة اختبار منطقة سعرية وظهور رفض M1. لا تدخل الآن.'}
+                else:
+                    raw={'side':'WAIT','market':market,'reason':
+                        'إشارة تحليلية لكن الوقف أو السبريد يمنع منطقة دخول مناسبة'}
+        memory['decisions'][market]=raw
+        memory['market_health'].setdefault(market,{})['last_analysis_at']=now
 
 async def refresh_ctrader_token():
     """Refresh only when requested from an authenticated owner browser."""
@@ -582,7 +653,7 @@ async def session(request:Request):
     return {'authenticated':ok,'password_configured':bool(OWNER_PASSWORD),
         'api_configured':bool(ID and SECRET),
         'redirect_uri':(PUBLIC_URL+'/api/oauth/callback') if PUBLIC_URL else 'Set PUBLIC_URL',
-        'version':'1.4.0'}
+        'version':'1.5.0'}
 @app.post('/api/login')
 async def login(payload:OwnerLogin,request:Request):
     require_origin(request)
@@ -619,7 +690,14 @@ async def status(request:Request):
             status_text='اتصال cTrader قائم؛ لا توجد تسعيرات جديدة لهذا السوق'
         else:
             status_text=memory.get('error') or 'اتصال cTrader يعيد المحاولة أو متوقف'
+        decision_view=memory['decisions'][market]
+        if decision_view.get('side') in ('BUY','SELL'):
+            if not quote_fresh or not still_actionable(
+                decision_view,q.get('bid'),q.get('ask'),now):
+                decision_view={'side':'WAIT','market':market,
+                    'reason':'انتهت صلاحية الدخول أو ابتعد السعر عن النطاق؛ لا تدخل'}
         market_data[market]={
+            'entry_watch':public_watch(memory['pending_watch'].get(market)),
             'quote_fresh':quote_fresh,'candle_fresh':candle_fresh,
             'analysis_ready':analysis_ready,'status_text':status_text,
             'analysis_error':health.get('analysis_error'),
@@ -627,7 +705,7 @@ async def status(request:Request):
                     bars1[-1]['t'] if bars1 else None,
                     memory['decisions'].get(market,{}),quote_fresh),
             'scan_duration_ms':health.get('scan_duration_ms'),
-            'quote':q,'decision':memory['decisions'][market],
+            'quote':q,'decision':decision_view,
             'spread':round(q.get('ask',0)-q.get('bid',0),5) if q.get('bid') and q.get('ask') else None,
             'bar_count_m1':len(memory['candles'].get(market,{}).get('1',[])),
             'bar_count_m5':len(memory['candles'].get(market,{}).get('5',[])),
@@ -651,6 +729,8 @@ async def status(request:Request):
 async def set_mode(data:ModeChoice,request:Request):
     require_owner(request);require_origin(request)
     if data.mode not in PRESETS:raise HTTPException(400,'Invalid mode')
+    if memory['mode']!=data.mode:
+        memory['pending_watch'].clear()
     memory['mode']=data.mode
     return {'ok':True,'mode':data.mode}
 @app.get('/api/oauth/start')
@@ -710,6 +790,7 @@ async def set_account(data:AccountChoice,request:Request):
         except (asyncio.CancelledError,Exception):pass
     memory['selected_account']=account;memory['symbols']={}
     memory['quotes']={};memory['candles']={};memory['last_eval']={}
+    memory['pending_watch'].clear();memory['setup_block_until'].clear()
     memory['connected']=False;memory['phase']='starting';memory['market_health']={}
     memory['error']='جارٍ تأسيس اتصال السوق وجلب الشموع'
     worker=asyncio.create_task(Monitor(account).start())
@@ -775,7 +856,7 @@ async def run_journal_regression_tests():
         suite=unittest.defaultTestLoader.discover(
             start_dir=str(ROOT/'tests'),pattern='test_*.py')
         result=unittest.TextTestRunner(stream=output,verbosity=1).run(suite)
-        app.state.journal_tests_passed=bool(result.wasSuccessful() and result.testsRun>=15)
+        app.state.journal_tests_passed=bool(result.wasSuccessful() and result.testsRun>=40)
         if app.state.journal_tests_passed:
             logger.warning('Quantum Simons paper journal regression OK: %s tests',result.testsRun)
         else:
