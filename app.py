@@ -34,6 +34,7 @@ SITE_SECRET=os.getenv('SITE_SECRET','').strip() or secrets.token_urlsafe(32)
 PUBLIC_URL=os.getenv('PUBLIC_URL','').rstrip('/')
 signer=TimestampSigner(SITE_SECRET)
 telegram=TelegramAlerts()
+SERVER_INSTANCE_ID=uuid.uuid4().hex[:12]
 
 memory={
  'token':None,'refresh_token':None,'token_expires':0,
@@ -513,6 +514,7 @@ async def status(request:Request):
             'symbol':memory['symbols'].get(market),
             'spark':[round(b['c'],5) for b in memory['candles'].get(market,{}).get('1',[])[-40:]]}
     payload={'connected':memory['connected'],'phase':memory['phase'],'error':memory['error'],
+        'server_instance_id':SERVER_INSTANCE_ID,
         'authenticated_to_ctrader':bool(memory['token']),
         'account':memory['selected_account'],'accounts':memory['accounts'],
         'mode':memory['mode'],'presets':PRESETS,'markets':market_data,
