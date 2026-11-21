@@ -21,6 +21,8 @@ from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from pydantic import BaseModel
 from engine import PRESETS, signal
 from telegram_alerts import TelegramAlerts, TelegramError
+from session_store import COOKIE_NAME, attach_cookie, deserialize_auth, delete_cookie
+from paper_journal import update_paper_journal, sanitize_client_backup
 
 app=FastAPI(title='Quantum Simons',docs_url=None,redoc_url=None)
 logger=logging.getLogger('quantum-simons')
@@ -43,6 +45,7 @@ memory={
  'symbols':{},'last_seen':{},'last_signal_ts':{},'last_eval':{},
 }
 worker=None
+auth_lock=asyncio.Lock()
 
 def require_owner(req:Request):
     if not OWNER_PASSWORD:raise HTTPException(503,'كلمة مرور الموقع لم تُضبط بعد لدى الاستضافة')
@@ -294,6 +297,7 @@ class Monitor:
         bars1=await self.bars(market,1)
         bars5=await self.bars(market,5) if int(time.time()//60)%5==0 else memory['candles'].get(market,{}).get('5',[])
         memory['candles'][market]={'1':bars1,'5':bars5}
+        update_paper_journal(memory['history'],market,bars1)
         now=time.time()
         if not bars1 or now-(bars1[-1]['t']/1000+60)>185:
             memory['decisions'][market]={'side':'WAIT','reason':'شموع M1 ليست حديثة؛ السوق مغلق أو التاريخ متأخر'}
@@ -309,6 +313,12 @@ class Monitor:
             else:
                 result['id']=uuid.uuid4().hex[:12]
                 result['created_at']=datetime.now(timezone.utc).isoformat()
+                result['account_id']=int(self.account['id'])
+                result['status']='OPEN'
+                result['checked_bar_time']=t
+                result['closed_at']=None
+                result['exit_price']=None
+                result['result_r']=None
                 memory['last_signal_ts'][market]=t
                 result['mode_label']=PRESETS[memory['mode']]['label']
                 memory['history'].insert(0,result.copy())
@@ -317,6 +327,119 @@ class Monitor:
                 asyncio.create_task(telegram.send_signal(result.copy()))
         memory['decisions'][market]=result
         memory['market_health'].setdefault(market,{})['last_analysis_at']=time.time()
+
+async def refresh_ctrader_token():
+    """Refresh only when requested from an authenticated owner browser."""
+    if not memory.get('refresh_token'):
+        return False
+    async with httpx.AsyncClient(timeout=15) as client:
+        response=await client.get('https://openapi.ctrader.com/apps/token',params={
+            'grant_type':'refresh_token',
+            'refresh_token':memory['refresh_token'],
+            'client_id':ID,'client_secret':SECRET})
+        response.raise_for_status()
+        tokens=response.json()
+    if not tokens.get('accessToken'):
+        return False
+    memory['token']=tokens['accessToken']
+    memory['refresh_token']=tokens.get('refreshToken') or memory['refresh_token']
+    memory['token_expires']=time.time()+int(tokens.get('expiresIn',2628000))
+    return True
+
+
+async def restore_auth_from_cookie(request:Request):
+    """Restore account and resume monitor on visit after Render restart.
+
+    Returns True only when a refreshed access token requires a new cookie.
+    Authentication remains behind SITE_PASSWORD.
+    """
+    global worker
+    data=deserialize_auth(request.cookies.get(COOKIE_NAME))
+    if not data:
+        return False
+    async with auth_lock:
+        if not memory['token']:
+            memory['token']=data['access']
+            memory['refresh_token']=data.get('refresh') or ''
+            memory['token_expires']=float(data.get('expires') or 0)
+            memory['accounts']=data.get('accounts') or []
+            selected=data.get('selected')
+            memory['selected_account']=next(
+                (a for a in memory['accounts'] if str(a['id'])==str(selected)),None)
+            memory['phase']='restoring' if memory['selected_account'] else 'needs_account'
+            memory['error']='جارٍ استعادة جلسة cTrader المحفوظة'
+            logger.info('Restoring owner account selection from encrypted cookie')
+        changed=False
+        if memory.get('refresh_token') and memory['token_expires'] < time.time()+3600:
+            try:
+                changed=await refresh_ctrader_token()
+            except Exception as exc:
+                logger.warning('cTrader refresh token failed: %s',type(exc).__name__)
+                memory['error']='انتهى التفويض؛ اضغط ربط cTrader لتجديد الإذن'
+                memory['phase']='needs_authorization'
+                return False
+        chosen=memory.get('selected_account')
+        if chosen and (worker is None or worker.done()):
+            memory['phase']='starting'
+            memory['error']='جارٍ استعادة اتصال cTrader من الجلسة المحفوظة'
+            worker=asyncio.create_task(Monitor(chosen).start())
+        return changed
+
+
+def set_ctrader_cookie(response):
+    if memory.get('token'):
+        attach_cookie(response,memory['token'],memory['refresh_token'],
+                      memory['token_expires'],memory['accounts'],
+                      memory['selected_account'])
+    return response
+
+
+class JournalRestore(BaseModel):
+    records: list[dict] = []
+
+@app.post('/api/journal/restore')
+async def restore_journal(data:JournalRestore,request:Request):
+    require_owner(request)
+    require_origin(request)
+    await restore_auth_from_cookie(request)
+    selected=memory.get('selected_account')
+    if not selected:
+        raise HTTPException(409,'اختر الحساب أولًا لاستعادة سجل الإشارات التجريبية')
+    existing={str(item.get('id')) for item in memory['history']}
+    restored=[]
+    for item in sanitize_client_backup(data.records,selected['id']):
+        if item['id'] in existing:
+            continue
+        restored.append(item)
+        existing.add(item['id'])
+    memory['history']=sorted(memory['history']+restored,
+                             key=lambda row:row.get('created_at') or '',reverse=True)[:200]
+    for row in memory['history']:
+        if row.get('account_id')==selected['id'] and row.get('bar_time'):
+            market=row['market']
+            memory['last_signal_ts'][market]=max(
+                int(memory['last_signal_ts'].get(market,0)),
+                int(row.get('bar_time',0)))
+    return {'ok':True,'restored':len(restored),'total':len(memory['history'])}
+
+@app.post('/api/restart-monitor')
+async def restart_monitor(request:Request):
+    global worker
+    require_owner(request)
+    require_origin(request)
+    await restore_auth_from_cookie(request)
+    chosen=memory.get('selected_account')
+    if not chosen:
+        raise HTTPException(409,'يلزم ربط cTrader واختيار الحساب أولًا')
+    if worker:
+        worker.cancel()
+        try:await worker
+        except (asyncio.CancelledError,Exception):pass
+    memory['phase']='starting'
+    memory['error']='جارٍ إعادة بدء المراقبة'
+    worker=asyncio.create_task(Monitor(chosen).start())
+    return {'ok':True,'phase':memory['phase']}
+
 
 async def discover_accounts():
     con=CTrader('live')
@@ -342,7 +465,7 @@ async def session(request:Request):
     return {'authenticated':ok,'password_configured':bool(OWNER_PASSWORD),
         'api_configured':bool(ID and SECRET),
         'redirect_uri':(PUBLIC_URL+'/api/oauth/callback') if PUBLIC_URL else 'Set PUBLIC_URL',
-        'version':'1.0.0'}
+        'version':'1.2.0'}
 @app.post('/api/login')
 async def login(payload:OwnerLogin,request:Request):
     require_origin(request)
@@ -354,10 +477,11 @@ async def login(payload:OwnerLogin,request:Request):
 @app.post('/api/logout')
 async def logout(request:Request):
     require_owner(request);require_origin(request)
-    r=JSONResponse({'ok':True});r.delete_cookie('qs_session');return r
+    r=JSONResponse({'ok':True});r.delete_cookie('qs_session');delete_cookie(r);return r
 @app.get('/api/status')
 async def status(request:Request):
     require_owner(request)
+    rotated=await restore_auth_from_cookie(request)
     market_data={}
     now=time.time()
     for market in ('XAUUSD','BTCUSD'):
@@ -388,12 +512,15 @@ async def status(request:Request):
             'bar_count_m5':len(memory['candles'].get(market,{}).get('5',[])),
             'symbol':memory['symbols'].get(market),
             'spark':[round(b['c'],5) for b in memory['candles'].get(market,{}).get('1',[])[-40:]]}
-    return {'connected':memory['connected'],'phase':memory['phase'],'error':memory['error'],
+    payload={'connected':memory['connected'],'phase':memory['phase'],'error':memory['error'],
         'authenticated_to_ctrader':bool(memory['token']),
         'account':memory['selected_account'],'accounts':memory['accounts'],
         'mode':memory['mode'],'presets':PRESETS,'markets':market_data,
         'signals':memory['history'][:35],'server_time':datetime.now(timezone.utc).isoformat(),
         'background_push_enabled':False,'telegram':telegram.public_status()}
+    response=JSONResponse(payload)
+    if rotated:set_ctrader_cookie(response)
+    return response
 @app.post('/api/mode')
 async def set_mode(data:ModeChoice,request:Request):
     require_owner(request);require_origin(request)
@@ -428,8 +555,18 @@ async def oauth_callback(request:Request,code:str='',state:str='',error:str=''):
         memory['refresh_token']=token_response.get('refreshToken')
         memory['token_expires']=time.time()+int(token_response.get('expiresIn',3600))
         memory['accounts']=await discover_accounts()
+        memory['selected_account']=None
         memory['error']=None if memory['accounts'] else 'تم الربط ولكن لم توجد حسابات مصرح بها'
-        return RedirectResponse('/?linked=1')
+        if len(memory['accounts'])==1:
+            memory['selected_account']=memory['accounts'][0]
+        redirect=RedirectResponse('/?linked=1')
+        set_ctrader_cookie(redirect)
+        if memory['selected_account']:
+            global worker
+            if worker:
+                worker.cancel()
+            worker=asyncio.create_task(Monitor(memory['selected_account']).start())
+        return redirect
     except Exception:
         memory['token']=None;memory['refresh_token']=None
         raise HTTPException(502,'تعذر إتمام ربط cTrader. تأكد من تفعيل التطبيق وتطابق Redirect URI')
@@ -437,6 +574,7 @@ async def oauth_callback(request:Request,code:str='',state:str='',error:str=''):
 async def set_account(data:AccountChoice,request:Request):
     global worker
     require_owner(request);require_origin(request)
+    await restore_auth_from_cookie(request)
     if not memory['token']:raise HTTPException(400,'ربط cTrader مطلوب أولاً')
     account=next((a for a in memory['accounts'] if int(a['id'])==data.id),None)
     if not account:raise HTTPException(400,'الحساب غير مصرح به')
@@ -449,7 +587,7 @@ async def set_account(data:AccountChoice,request:Request):
     memory['connected']=False;memory['phase']='starting';memory['market_health']={}
     memory['error']='جارٍ تأسيس اتصال السوق وجلب الشموع'
     worker=asyncio.create_task(Monitor(account).start())
-    return {'ok':True,'connecting':True}
+    return set_ctrader_cookie(JSONResponse({'ok':True,'connecting':True}))
 
 class TelegramConnect(BaseModel):
     bot_token: str = ""
