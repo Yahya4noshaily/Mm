@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from engine import PRESETS, signal
 from telegram_alerts import TelegramAlerts, TelegramError
 from session_store import COOKIE_NAME, attach_cookie, deserialize_auth, delete_cookie
-from paper_journal import update_paper_journal, sanitize_client_backup
+from paper_journal import update_paper_journal, sanitize_client_backup, settle_on_quote, compute_performance
 
 app=FastAPI(title='Quantum Simons',docs_url=None,redoc_url=None)
 logger=logging.getLogger('quantum-simons')
@@ -161,21 +161,38 @@ class Monitor:
     async def on_event(self,msg):
         if msg.get('payloadType')!=2131:return
         item=msg.get('payload') or {}
-        sid=int(item.get('symbolId',-1))
-        for market,sym in memory['symbols'].items():
+        try:sid=int(item.get('symbolId',-1))
+        except (ValueError,TypeError):return
+        for market,sym in list(memory['symbols'].items()):
             if int(sym['symbolId'])!=sid:continue
             q=memory['quotes'].get(market,{})
-            if item.get('bid') is not None:q['bid']=int(item['bid'])/1e5
-            if item.get('ask') is not None:q['ask']=int(item['ask'])/1e5
+            touched=[]
+            received=time.time()
+            if item.get('bid') is not None:
+                q['bid']=int(item['bid'])/1e5
+                q['bid_at']=received
+                touched.append('bid')
+            if item.get('ask') is not None:
+                q['ask']=int(item['ask'])/1e5
+                q['ask_at']=received
+                touched.append('ask')
             if q.get('ask') and q.get('bid') and q['ask']>q['bid']:
                 self.spreads[market].append(q['ask']-q['bid'])
             if q.get('bid') and q.get('ask'):
-                q['received_at']=time.time()
-                memory['market_health'].setdefault(market,{})['last_quote_at']=q['received_at']
+                q['received_at']=received
+                memory['market_health'].setdefault(market,{})['last_quote_at']=received
             if item.get('timestamp'):
                 stamp=int(item['timestamp'])
                 q['market_ts']=stamp/1000 if stamp>100_000_000_000 else stamp
             memory['quotes'][market]=q
+            health=memory['market_health'].get(market,{})
+            # Only allow live exits after initial historical reconciliation,
+            # so a restart cannot label an old TP/SL as a current tick hit.
+            if health.get('candles_loaded') and touched:
+                for updated in touched:
+                    settle_on_quote(memory['history'],market,q.get('bid'),q.get('ask'),
+                                    received,changed_side=updated,
+                                    account_id=self.account['id'])
     async def bars(self,market,period):
         symbol_id=memory['symbols'][market]['symbolId']
         now=time.time();lookback=86400*3 if period==1 else 86400*9
@@ -280,6 +297,9 @@ class Monitor:
                 memory['candles'][market]={
                     '1':await self.bars(market,1),
                     '5':await self.bars(market,5)}
+                update_paper_journal(memory['history'],market,
+                                     memory['candles'][market]['1'],
+                                     account_id=self.account['id'])
                 memory['market_health'][market]['candles_loaded']=True
             except asyncio.CancelledError:
                 raise
@@ -291,15 +311,17 @@ class Monitor:
         memory['error']=None
         logger.info('cTrader authenticated and spot feeds subscribed: %s',','.join(subscribed))
     async def update_market(self,market):
+        # Reconcile completed candles even when a market stops quoting.
+        # Quote freshness is required for NEW signals, not for the journal.
         q=memory['quotes'].get(market,{})
-        if not q.get('received_at') or time.time()-q['received_at']>25:
-            memory['decisions'][market]={'side':'WAIT','reason':'لا توجد أسعار حديثة؛ السوق مغلق أو الاتصال متأخر'}
-            return
         bars1=await self.bars(market,1)
         bars5=await self.bars(market,5) if int(time.time()//60)%5==0 else memory['candles'].get(market,{}).get('5',[])
         memory['candles'][market]={'1':bars1,'5':bars5}
-        update_paper_journal(memory['history'],market,bars1)
+        update_paper_journal(memory['history'],market,bars1,account_id=self.account['id'])
         now=time.time()
+        if not q.get('received_at') or now-q['received_at']>25:
+            memory['decisions'][market]={'side':'WAIT','reason':'لا توجد أسعار مباشرة حديثة؛ تم تحديث سجل الصفقات من الشموع'}
+            return
         if not bars1 or now-(bars1[-1]['t']/1000+60)>185:
             memory['decisions'][market]={'side':'WAIT','reason':'شموع M1 ليست حديثة؛ السوق مغلق أو التاريخ متأخر'}
             memory['market_health'].setdefault(market,{})['last_analysis_at']=now
@@ -316,6 +338,8 @@ class Monitor:
                 result['created_at']=datetime.now(timezone.utc).isoformat()
                 result['account_id']=int(self.account['id'])
                 result['status']='OPEN'
+                result['mode']=memory['mode']
+                result['risk_pct']=PRESETS[memory['mode']]['risk_pct']
                 result['checked_bar_time']=t
                 result['closed_at']=None
                 result['exit_price']=None
@@ -323,7 +347,7 @@ class Monitor:
                 memory['last_signal_ts'][market]=t
                 result['mode_label']=PRESETS[memory['mode']]['label']
                 memory['history'].insert(0,result.copy())
-                memory['history']=memory['history'][:100]
+                memory['history']=memory['history'][:200]
                 # Notify only real, unique BUY/SELL signals, never WAIT.
                 asyncio.create_task(telegram.send_signal(result.copy()))
         memory['decisions'][market]=result
@@ -415,6 +439,11 @@ async def restore_journal(data:JournalRestore,request:Request):
         existing.add(item['id'])
     memory['history']=sorted(memory['history']+restored,
                              key=lambda row:row.get('created_at') or '',reverse=True)[:200]
+    for market in ('XAUUSD','BTCUSD'):
+        bars=memory['candles'].get(market,{}).get('1',[])
+        if bars:
+            update_paper_journal(memory['history'],market,bars,
+                                 account_id=selected['id'])
     for row in memory['history']:
         if row.get('account_id')==selected['id'] and row.get('bar_time'):
             market=row['market']
@@ -518,7 +547,10 @@ async def status(request:Request):
         'authenticated_to_ctrader':bool(memory['token']),
         'account':memory['selected_account'],'accounts':memory['accounts'],
         'mode':memory['mode'],'presets':PRESETS,'markets':market_data,
-        'signals':memory['history'][:35],'server_time':datetime.now(timezone.utc).isoformat(),
+        'signals':memory['history'][:200],
+        'performance':compute_performance(memory['history'],
+                    memory['selected_account']['id'] if memory['selected_account'] else None),
+        'server_time':datetime.now(timezone.utc).isoformat(),
         'background_push_enabled':False,'telegram':telegram.public_status()}
     response=JSONResponse(payload)
     if rotated:set_ctrader_cookie(response)
