@@ -196,6 +196,98 @@ function syncJournal(live){
  state.journal=[...map.values()].sort((a,b)=>Date.parse(b.created_at||0)-Date.parse(a.created_at||0)).slice(0,200);
  writeStorage('qs-paper-journal-v1',JSON.stringify(state.journal));
 }
+
+function journalMode(row){
+ if(row.mode==='active'||row.mode==='conservative')return row.mode;
+ if(row.mode_label==='محافظ')return 'conservative';
+ if(row.mode_label==='هجومي'||row.mode_label==='نشط')return 'active';
+ const rr=Number(row.rr);
+ if(Number.isFinite(rr)&&Math.abs(rr-1.3)<.02)return 'active';
+ if(Number.isFinite(rr)&&Math.abs(rr-2)<.02)return 'conservative';
+ return 'unknown';
+}
+function journalResultR(row){
+ if(row.status!=='TARGET'&&row.status!=='STOP')return null;
+ const value=Number(row.result_r);
+ if(row.result_r!=null&&Number.isFinite(value))return value;
+ const entry=Number(row.entry),stop=Number(row.stop),target=Number(row.target);
+ const risk=Math.abs(entry-stop);
+ if(!Number.isFinite(risk)||risk<=0)return null;
+ const exit=row.status==='TARGET'?target:stop;
+ return Number(((exit-entry)*(row.side==='BUY'?1:-1)/risk).toFixed(5));
+}
+function calcStat(rows){
+ const finished=rows.filter(r=>r.status==='TARGET'||r.status==='STOP');
+ const wins=finished.filter(r=>r.status==='TARGET').length;
+ const losses=finished.length-wins;
+ const open=rows.filter(r=>r.status==='OPEN'||!r.status).length;
+ const unverified=rows.filter(r=>r.status==='UNVERIFIED').length;
+ const netR=finished.reduce((acc,r)=>acc+(journalResultR(r)||0),0);
+ let theoretical=0,qualified=0;
+ for(const r of finished){
+  const rr=journalResultR(r),mode=journalMode(r);
+  const originalRisk=r.risk_pct==null?NaN:Number(r.risk_pct);
+  const risk=Number.isFinite(originalRisk)&&originalRisk>0&&originalRisk<=2?originalRisk:mode==='active'?.25:mode==='conservative'?.15:NaN;
+  if(rr!=null&&Number.isFinite(risk)){theoretical+=rr*risk;qualified++}
+ }
+ return{total:rows.length,finished:finished.length,wins,losses,open,unverified,
+  winRate:finished.length?100*wins/finished.length:null,
+  netR,averageR:finished.length?netR/finished.length:null,
+  theoretical:qualified?theoretical:null};
+}
+function signedNumber(num,digits=2){
+ if(!Number.isFinite(num))return '—';
+ return (num>0?'+':'')+num.toFixed(digits);
+}
+function renderPerformance(){
+ const accountId=state.data?.account?.id;
+ const selected=el('performanceMarket').value;
+ const rows=(state.journal||[]).filter(r=>(!accountId||!r.account_id||String(r.account_id)===String(accountId))
+    &&(selected==='ALL'||r.market===selected));
+ const total=calcStat(rows);
+ const rate=total.winRate===null?'—':total.winRate.toFixed(1)+'%';
+ el('performanceOverview').textContent=
+  'إجمالي الإشارات '+total.total+' • أغلقت نظريًا '+total.finished+
+  ' ('+total.wins+' هدف / '+total.losses+' وقف) • مفتوحة '+total.open+
+  ' • غير مؤكدة '+total.unverified+
+  ' • نسبة نجاح المغلقة '+rate+
+  ' • صافي '+signedNumber(total.netR)+'R';
+ const box=el('performanceModes');box.replaceChildren();
+ for(const mode of ['active','conservative']){
+  const group=rows.filter(r=>journalMode(r)===mode);
+  const t=calcStat(group);
+  const card=document.createElement('div');card.className='perfMode';
+  const name=document.createElement('h4');name.textContent=mode==='active'?'⚡ هجومي':'🛡️ محافظ';
+  const win=document.createElement('div');win.className='perfValue';win.textContent=t.winRate===null?'—':t.winRate.toFixed(1)+'%';
+  win.style.color=t.winRate===null?'var(--muted)':t.winRate>=50?'var(--mint)':'var(--gold)';
+  const caption=document.createElement('div');caption.className='perfMini';
+  caption.textContent='نسبة النجاح • '+t.finished+' مغلقة • '+t.open+' مفتوحة • '+t.unverified+' غير مؤكدة';
+  const net=document.createElement('div');net.className='perfMini';
+  net.textContent='الصافي: '+signedNumber(t.netR)+'R'+(t.theoretical!=null?' • أثر افتراضي '+signedNumber(t.theoretical,3)+'%':'');
+  card.append(name,win,caption,net);box.append(card);
+ }
+ const tbody=el('performanceStrategies');tbody.replaceChildren();
+ const strategies=[['Trend Pullback','تصحيح الاتجاه'],
+  ['Mean Reversion','ارتداد المتوسط'],
+  ['Compression Breakout','اختراق الانكماش']];
+ for(const mode of ['active','conservative']){
+  for(const [key,label] of strategies){
+   const group=rows.filter(r=>journalMode(r)===mode&&r.strategy===key);
+   const t=calcStat(group);
+   const tr=document.createElement('tr');
+   const title=document.createElement('td');title.textContent=(mode==='active'?'هجومي':'محافظ')+' / '+key;
+   const small=document.createElement('span');small.className='strategyLabel';small.textContent=label+' • '+t.open+' مفتوحة';
+   title.append(small);tr.append(title);
+   for(const value of [t.finished?String(t.finished):'0',
+       t.winRate===null?'—':t.winRate.toFixed(1)+'%',
+       signedNumber(t.netR)+'R']){
+    const td=document.createElement('td');td.dataset.num='1';td.textContent=value;tr.append(td);
+   }
+   tbody.append(tr);
+  }
+ }
+}
+
 function renderJournal(){
  const hist=el('history');
  hist.replaceChildren();
@@ -237,8 +329,15 @@ function renderJournal(){
   if(rec.closed_at){
    const closed=document.createElement('div');closed.textContent='🏁 وقت النتيجة: ';
    const ct=document.createElement('span');ct.textContent=localTime(rec.closed_at);closed.append(ct);
-   if(rec.result_r!=null)closed.append(document.createTextNode(' • '+(rec.result_r>0?'+':'')+rec.result_r+'R'));
+   if(rec.result_r!=null){
+    closed.append(document.createTextNode(' • '+signedNumber(Number(rec.result_r),3)+'R'));
+    const pct=rec.theoretical_equity_pct;
+    if(pct!=null&&Number.isFinite(Number(pct)))closed.append(document.createTextNode(' • أثر افتراضي '+signedNumber(Number(pct),3)+'%'));
+   }
    times.append(closed);
+   const source=document.createElement('div');
+   source.textContent=rec.resolution_source==='spot'?'مصدر النتيجة: تسعير Bid/Ask مباشر':'مصدر النتيجة: نطاق شمعة M1 مكتملة، وقت اللمس تقريبي';
+   times.append(source);
   }
   if(rec.status==='UNVERIFIED'||rec.ambiguous_candle){
    const warning=document.createElement('div');warning.textContent=rec.status==='UNVERIFIED'?'⚠️ تعذر التحقق بسبب انقطاع بيانات الشموع.':'⚠️ الوقف والهدف داخل شمعة واحدة؛ حُسب الوقف أولًا.';times.append(warning)
@@ -303,6 +402,7 @@ function render(){
  if(!sel.value)sel.value='';
  syncJournal(data.signals||[]);
  renderJournal();
+ renderPerformance();
  attemptJournalRestore(data);
  if(state.seen)for(const ev of (data.signals||[]).slice(0,2))notifySignal(ev);
  if(!state.seen){for(const ev of data.signals||[])if(ev.id)state.previousId[ev.market]=ev.id;state.seen=true}
@@ -338,6 +438,12 @@ el('restart').addEventListener('click',async()=>{
  catch(err){alert(err.message)}finally{el('restart').disabled=false}
 });
 el('exportJournal').addEventListener('click',saveJournalCSV);
+const initialPerfMarket=readStorage('qs-performance-market-v1');
+el('performanceMarket').value=['XAUUSD','BTCUSD'].includes(initialPerfMarket)?initialPerfMarket:'ALL';
+el('performanceMarket').addEventListener('change',()=>{
+ writeStorage('qs-performance-market-v1',el('performanceMarket').value);
+ renderPerformance();
+});
 el('copy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(state.app.redirect_uri);el('copy').textContent='تم النسخ'}catch{alert('النسخ غير متاح في هذا المتصفح')}});
 el('audio').addEventListener('click',()=>{state.audio=!state.audio;try{const C=window.AudioContext||window.webkitAudioContext;if(state.audio&&C&&!state.audioContext)state.audioContext=new C();if(state.audio&&state.audioContext)state.audioContext.resume()}catch{}el('audio').textContent=state.audio?'الصوت مفعّل ✓':'تفعيل الصوت'});
 el('notifications').addEventListener('click',async()=>{if(!('Notification'in window)){alert('المتصفح لا يدعم إشعارات الويب هنا. على الآيفون أضف الموقع للشاشة الرئيسية إذا كان النظام يدعم الإشعارات.');return}const ans=await Notification.requestPermission();el('notifications').textContent=ans==='granted'?'الإذن متاح ✓':'الإذن: '+ans});
