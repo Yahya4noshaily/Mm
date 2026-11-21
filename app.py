@@ -530,6 +530,10 @@ async def discover_accounts():
 
 @app.get('/')
 async def index():return FileResponse(ROOT/'index.html')
+
+@app.get('/assets/alert_policy.js')
+async def alert_policy_js():
+    return FileResponse(ROOT/'alert_policy.js',media_type='application/javascript',headers={'Cache-Control':'no-store'})
 @app.get('/healthz')
 async def health():return {'ok':True,'service':'Quantum Simons','api_configured':bool(ID and SECRET),'journal_tests_passed':getattr(app.state,'journal_tests_passed',False)}
 @app.get('/api/session')
