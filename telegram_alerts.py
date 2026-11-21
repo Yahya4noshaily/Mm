@@ -177,6 +177,20 @@ class TelegramAlerts:
                 accuracy_text += " • عينة محدودة"
         else:
             accuracy_text = "نجاح الاستراتيجية في السجل التجريبي السابق: غير متاح (لا صفقات محسومة)"
+        if record.get("entry_timing_version")=="retest_v1":
+            try:
+                expiry=datetime.fromisoformat(record["valid_until"]).astimezone(
+                    ZoneInfo("Asia/Riyadh")).strftime("%H:%M:%S")
+            except (ValueError,KeyError,TypeError):
+                expiry="غير معروف"
+            timing_text=(
+                f"✅ إعادة اختبار المنطقة وشمعة M1 المؤكدة\n"
+                f"منطقة الدخول: {price(record.get('zone_lower'))} — {price(record.get('zone_upper'))}\n"
+                f"صلاحية الدخول حتى: {expiry} (السعودية)\n"
+                "⚠️ لا تدخل بعد انتهاء الصلاحية أو خروج السعر من المنطقة.\n"
+            )
+        else:
+            timing_text=""
         txt = (
             f"{icon} Quantum Simons • {side}\n"
             f"السوق: {record.get('market', '—')}\n"
@@ -189,7 +203,8 @@ class TelegramAlerts:
             f"الوضع: {record.get('mode_label', '—')}\n"
             f"{accuracy_text}\n"
             f"الوقت (السعودية): {timestamp}\n"
-            "ملاحظة: النسبة أداء سابق نظري وليست احتمال ربح هذه الإشارة أو ضمانًا للربح."
+            f"{timing_text}"
+            "ملاحظة: إشارة تجريبية مشروطة وليست ضمانًا أو أمر تداول آليًا."
         )
         try:
             await self._call(self._token, "sendMessage", {
