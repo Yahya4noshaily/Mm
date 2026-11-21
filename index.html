@@ -10,6 +10,7 @@
 .journalStats{background:#0a2433;border:1px solid var(--stroke);border-radius:11px;padding:11px;margin:10px 0;color:var(--mint);font-size:12px;line-height:1.7}.ledgerEntry{border-bottom:1px solid var(--stroke);padding:13px 0;display:flex;flex-direction:column;gap:9px}.ledgerEntry:last-child{border:0}.ledgerTop{display:flex;justify-content:space-between;align-items:center;gap:8px}.ledgerTop b{font-size:13px}.ledgerTop .tiny{margin-top:4px}.ledgerBadge{padding:6px 9px;border-radius:7px;border:1px solid var(--stroke);white-space:nowrap;font-size:11px;font-weight:700}.ledgerGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.ledgerGrid>div{background:#0c2534;padding:7px;border-radius:7px;border:1px solid #244359;min-width:0}.ledgerGrid label{display:block;color:var(--muted);font-size:10px;margin-bottom:4px}.ledgerGrid strong{font-size:12px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.ledgerTimes{font-size:11px;color:var(--muted);line-height:1.9}.ledgerTimes span{color:var(--text)}
 .performanceOverview{border:1px solid var(--stroke);background:#0c2635;border-radius:11px;padding:12px;font-size:12px;line-height:1.9;color:#dfedee}.performanceModeGrid{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:12px}.perfMode{border:1px solid var(--stroke);background:#0b2635;border-radius:12px;padding:12px;min-width:0}.perfMode h4{font-size:14px;margin:0 0 10px}.perfValue{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}.perfMini{font-size:11px;line-height:1.9;color:var(--muted)}.performanceTableWrap{overflow-x:auto}.performanceTable{width:100%;border-collapse:collapse;min-width:420px;font-size:12px}.performanceTable th{color:var(--muted);font-size:11px;text-align:right;font-weight:600;border-bottom:1px solid var(--stroke);padding:10px 6px}.performanceTable td{border-bottom:1px solid #223d4c;padding:10px 6px}.performanceTable td[data-num]{direction:ltr;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.performanceTable tr:last-child td{border:0}.performanceTable .strategyLabel{font-size:10px;color:var(--muted);display:block;margin-top:3px} @media(max-width:600px){.performanceModeGrid{grid-template-columns:1fr 1fr}.perfValue{font-size:19px}#performanceMarket{max-width:185px;font-size:12px}}
 .scannerDiag{background:#0b2535;border:1px solid #2a4353;border-radius:12px;padding:12px}.scannerDiag .chip{padding:5px 9px;font-size:10px}.scannerDiag b{color:var(--text)}#scannerInfo{margin-top:5px;color:var(--gold)}
+.lastSignalInfo{border-top:1px solid var(--stroke);margin-top:12px;padding-top:11px;line-height:1.8;color:var(--gold);font-size:12px}
 </style></head>
 <body><div class="wrap">
 <header class="head"><div class="brand"><div class="logo">∑</div><div><div class="over">QUANTITATIVE SIGNALS</div><strong>QUANTUM SIMONS</strong></div></div><div id="connection" class="chip off">● غير متصل</div></header>
@@ -19,7 +20,7 @@
 <div style="display:flex;gap:9px;flex-wrap:wrap"><span id="message" class="chip off">بانتظار الاتصال</span><span class="chip">v1.3 • ماسح محسن • نفس الاستراتيجيات</span></div>
 <div class="buttons" id="markets"><button class="btn selected" type="button" data-market="XAUUSD">🥇 الذهب XAUUSD</button><button class="btn" type="button" data-market="BTCUSD">₿ بيتكوين BTCUSD</button></div>
 <div class="layout">
-<section class="panel signal-card"><div><div class="label">الإشارة الحالية • <b id="marketName">XAUUSD</b></div><div id="signal" class="side wait">WAIT</div><div id="reason" class="reason">لن تظهر أي إشارة قبل اكتمال اتصال cTrader واستلام بيانات الشموع والأسعار الفعلية.</div></div><div><div id="strategy" class="fine" style="margin-bottom:15px">الاستراتيجية: —</div><div class="summary"><div><label>منطقة الدخول</label><b id="entry">—</b></div><div><label>وقف تجريبي</label><b id="stop">—</b></div><div><label>هدف تجريبي</label><b id="target">—</b></div></div></div></section>
+<section class="panel signal-card"><div><div class="label">الإشارة الحالية • <b id="marketName">XAUUSD</b></div><div id="signal" class="side wait">WAIT</div><div id="reason" class="reason">لن تظهر أي إشارة قبل اكتمال اتصال cTrader واستلام بيانات الشموع والأسعار الفعلية.</div><div id="lastSignalInfo" class="fine lastSignalInfo">آخر إشارة محفوظة: لا توجد إشارات بعد. الإشارات القديمة لا تُعد أمر دخول الآن.</div></div><div><div id="strategy" class="fine" style="margin-bottom:15px">الاستراتيجية: —</div><div class="summary"><div><label>منطقة الدخول</label><b id="entry">—</b></div><div><label>وقف تجريبي</label><b id="stop">—</b></div><div><label>هدف تجريبي</label><b id="target">—</b></div></div></div></section>
 <section class="panel"><h3 class="stats-title">📡 بيانات السوق</h3><div class="stats"><div class="stat"><label>Ask (شراء)</label><b id="ask">—</b></div><div class="stat"><label>Bid (بيع)</label><b id="bid">—</b></div><div class="stat"><label>Spread</label><b id="spread">—</b></div><div class="stat"><label>عمر السعر</label><b id="latency">—</b></div></div><svg id="spark" class="spark" viewBox="0 0 320 70" preserveAspectRatio="none" role="img" aria-label="إغلاقات آخر 40 شمعة مكتملة"><path id="sparkPath" d="" fill="none" stroke="#55dbb8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><div class="spark-label">آخر 40 إغلاق M1 من cTrader</div><div class="line"></div><div class="tiny">الشموع المكتملة: <b id="bars">M1 — · M5 —</b><br>آخر سعر فعلي: <span id="lastTime">—</span></div>
 <div class="scannerDiag" aria-live="polite" style="margin-top:13px">
   <div class="setting-line" style="margin:0 0 5px;align-items:center"><b style="font-size:12px">🔍 حالة ماسح الإشارات</b><span id="scannerState" class="chip off">لم يبدأ</span></div>
@@ -103,6 +104,7 @@
 <p id="debug" aria-live="polite"></p>
 </main><div class="footer">Quantum Simons • Quantitative Research Dashboard • نسخة مستقلة بدون ربط مع أي مشروع سابق</div>
 </div>
+<script src="/assets/alert_policy.js"></script>
 <script>
 (()=>{'use strict';
 const el=id=>document.getElementById(id);
@@ -112,17 +114,19 @@ const savedMarket=readStorage('qs-selected-market-v1');
 const savedMode=readStorage('qs-selected-mode-v1');
 let savedJournal=[];
 try{const parsed=JSON.parse(readStorage('qs-paper-journal-v1')||'[]');if(Array.isArray(parsed))savedJournal=parsed.slice(0,200)}catch{}
+function readSeenIds(){try{
+ const value=JSON.parse(readStorage('qs-seen-alert-ids-v2')||'[]');
+ return Array.isArray(value)?value.filter(x=>typeof x==='string').slice(-300):[];
+ }catch{return []}
+}
 const state={market:savedMarket==='BTCUSD'?'BTCUSD':'XAUUSD',mode:savedMode==='conservative'?'conservative':'active',
- ready:false,seen:false,previousId:{XAUUSD:null,BTCUSD:null},audio:false,audioContext:null,app:false,data:null,telegramInitialized:false,
+ ready:false,notificationsInitialized:false,seenSignalIds:readSeenIds(),audio:false,audioContext:null,app:false,data:null,telegramInitialized:false,
  journal:savedJournal,restoreKey:'',restoring:false,modeSynced:false};
 const toText=(id,value)=>{el(id).textContent=value==null||value===''?'—':String(value)};
 function format(v){return Number.isFinite(Number(v))&&v!=null?Number(v).toLocaleString('en-US',{maximumFractionDigits:5}):'—'}
 async function fetchJSON(url,options={}){let res=await fetch(url,{credentials:'same-origin',cache:'no-store',...options});let obj=await res.json().catch(()=>({detail:'تعذر قراءة رد الخادم'}));if(!res.ok)throw Error(typeof obj.detail==='string'?obj.detail:'HTTP '+res.status);return obj}
 function notifySignal(record){
- if(!state.seen||!record||!record.id)return;
- const key=record.market;if(state.previousId[key]===record.id)return;
- state.previousId[key]=record.id;
- if(record.side!=='BUY'&&record.side!=='SELL')return;
+ if(!record||!record.id||!['BUY','SELL'].includes(record.side))return;
  if(state.audio&&state.audioContext){try{const ctx=state.audioContext;ctx.resume();const osc=ctx.createOscillator();const gain=ctx.createGain();osc.type='sine';osc.frequency.value=record.side==='BUY'?780:440;gain.gain.value=.075;osc.connect(gain).connect(ctx.destination);osc.start();osc.stop(ctx.currentTime+.32)}catch{}}
  if('Notification'in window&&Notification.permission==='granted'){try{new Notification('Quantum Simons • '+record.side,{body:record.market+' • '+(record.reason||'إشارة فنية'),tag:record.id})}catch{}}
 }
@@ -396,6 +400,11 @@ function render(){
  toText('marketName',state.market);toText('signal',side);
  el('signal').className='side '+side.toLowerCase();
  toText('reason',ready?(current.reason||'لا توجد فرصة مؤهلة'):(m.analysis_error||m.status_text||data.error||'بيانات غير مكتملة؛ لا إشارات.'));
+ const recent=(data.signals||[]).find(rec=>rec&&rec.market===state.market&&(!data.account?.id||!rec.account_id||String(rec.account_id)===String(data.account.id)));
+ const statusLabel={OPEN:'قيد المتابعة',TARGET:'الهدف تحقق نظريًا',STOP:'الوقف تحقق نظريًا',UNVERIFIED:'غير مؤكدة'};
+ toText('lastSignalInfo',recent?
+  ('آخر إشارة محفوظة: '+recent.side+' • '+localTime(recent.created_at)+' • '+(statusLabel[recent.status]||'حالتها غير معروفة')+' — ليست أمر دخول جديدًا'):
+  'آخر إشارة محفوظة: لا توجد إشارات بعد. الإشارات القديمة لا تُعد أمر دخول الآن.');
  toText('strategy',ready?('الاستراتيجية: '+(side==='WAIT'?'لا توجد فرصة مؤهلة':current.strategy||'—')):('حالة المحرك: '+(data.phase||'بانتظار اكتمال البيانات')));
  for(let field of ['entry','stop','target'])toText(field,side==='WAIT'?'—':format(current[field]));
  toText('ask',fresh?format(q.ask):'—');toText('bid',fresh?format(q.bid):'—');toText('spread',fresh?format(m.spread):'—');
@@ -421,8 +430,14 @@ function render(){
  renderJournal();
  renderPerformance();
  attemptJournalRestore(data);
- if(state.seen)for(const ev of (data.signals||[]).slice(0,2))notifySignal(ev);
- if(!state.seen){for(const ev of data.signals||[])if(ev.id)state.previousId[ev.market]=ev.id;state.seen=true}
+ const policy=globalThis.QuantumAlertPolicy;
+ if(policy){
+  const next=policy.nextAlertState(data.signals||[],data.markets||{},state.seenSignalIds,state.notificationsInitialized,data.server_time);
+  state.seenSignalIds=next.ids;
+  writeStorage('qs-seen-alert-ids-v2',JSON.stringify(state.seenSignalIds));
+  state.notificationsInitialized=true;
+  for(const ev of next.alerts)notifySignal(ev);
+ }
  renderTelegram(data.telegram||{});
 }
 async function poll(){try{const data=await fetchJSON('/api/status');
@@ -464,7 +479,7 @@ el('performanceMarket').addEventListener('change',()=>{
 el('copy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(state.app.redirect_uri);el('copy').textContent='تم النسخ'}catch{alert('النسخ غير متاح في هذا المتصفح')}});
 el('audio').addEventListener('click',()=>{state.audio=!state.audio;try{const C=window.AudioContext||window.webkitAudioContext;if(state.audio&&C&&!state.audioContext)state.audioContext=new C();if(state.audio&&state.audioContext)state.audioContext.resume()}catch{}el('audio').textContent=state.audio?'الصوت مفعّل ✓':'تفعيل الصوت'});
 el('notifications').addEventListener('click',async()=>{if(!('Notification'in window)){alert('المتصفح لا يدعم إشعارات الويب هنا. على الآيفون أضف الموقع للشاشة الرئيسية إذا كان النظام يدعم الإشعارات.');return}const ans=await Notification.requestPermission();el('notifications').textContent=ans==='granted'?'الإذن متاح ✓':'الإذن: '+ans});
-el('logout').addEventListener('click',async()=>{try{await fetchJSON('/api/logout',{method:'POST'});state.seen=false;await checkSession()}catch(e){alert(e.message)}});
+el('logout').addEventListener('click',async()=>{try{await fetchJSON('/api/logout',{method:'POST'});state.notificationsInitialized=false;await checkSession()}catch(e){alert(e.message)}});
 
 el('tgDiscover').addEventListener('click',async()=>{
  tgBusy(true);tgFeedback('أتحقق من البوت وأبحث عن المحادثات التي أرسلت له رسائل...');
