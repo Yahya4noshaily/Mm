@@ -3,6 +3,7 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 import os
 import secrets
 import time
@@ -23,6 +24,7 @@ from engine import PRESETS, signal
 from telegram_alerts import TelegramAlerts, TelegramError
 from session_store import COOKIE_NAME, attach_cookie, deserialize_auth, delete_cookie
 from paper_journal import update_paper_journal, sanitize_client_backup, settle_on_quote, compute_performance
+from scan_scheduler import can_start_scan, note_scan_attempt, note_scan_success, note_scan_failure, scan_diagnostics
 
 app=FastAPI(title='Quantum Simons',docs_url=None,redoc_url=None)
 logger=logging.getLogger('quantum-simons')
@@ -157,6 +159,7 @@ class Monitor:
         self.account=account
         self.conn=None
         self.task=None
+        self.scan_tasks={}
         self.spreads={'XAUUSD':deque(maxlen=100),'BTCUSD':deque(maxlen=100)}
     async def on_event(self,msg):
         if msg.get('payloadType')!=2131:return
@@ -207,6 +210,41 @@ class Monitor:
         current_ms=int(now//(60*period))*60*period*1000
         records=sorted([b for b in records if b['t']<current_ms],key=lambda x:x['t'])
         return list({b['t']:b for b in records}.values())[-340:]
+    async def scan_once(self,market,minute):
+        """Try a completed-bar evaluation independently for each market."""
+        health=memory['market_health'].setdefault(market,{})
+        started=time.time()
+        note_scan_attempt(health,minute,started)
+        try:
+            await self.update_market(market)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raw=str(exc).strip()
+            code=raw if re.fullmatch(r'[A-Z0-9_:-]{2,80}',raw) else type(exc).__name__
+            reason='خطأ بيانات cTrader: '+code
+            note_scan_failure(health,time.time(),reason)
+            health['scan_duration_ms']=round((time.time()-started)*1000)
+            memory['decisions'][market]={'side':'WAIT','reason':reason+'؛ إعادة المحاولة خلال ثوانٍ','market':market}
+            logger.warning('Market scan %s failed: %s; attempt=%d of 3',
+                           market,code,health.get('scan_attempts_this_minute',0))
+            # Crucial: DO NOT mark this minute as evaluated when the API fails.
+        else:
+            note_scan_success(health,time.time())
+            memory['last_eval'][market]=minute
+            health['scan_duration_ms']=round((time.time()-started)*1000)
+            health['last_scanned_reason']=memory['decisions'].get(market,{}).get('reason','')
+            bars=memory['candles'].get(market,{}).get('1',[])
+            if bars:
+                health['last_scanned_bar_time']=bars[-1]['t']
+            if minute % 10 == 0:
+                logger.info('Market scan OK %s side=%s M1=%d M5=%d delay=%dms',
+                            market,memory['decisions'].get(market,{}).get('side','WAIT'),
+                            len(bars),len(memory['candles'].get(market,{}).get('5',[])),
+                            health['scan_duration_ms'])
+        finally:
+            health['scan_inflight']=False
+
     async def start(self):
         while True:
             try:
@@ -214,32 +252,38 @@ class Monitor:
                 while True:
                     if not self.conn or not self.conn.ws or self.conn.receiver.done():
                         raise ConnectionError('cTrader socket reader stopped')
-                    minute=int(time.time()//60)
+                    now=time.time()
+                    minute=int(now//60)
                     for market in list(memory['symbols']):
                         health=memory['market_health'].get(market,{})
-                        if not health.get('spot_subscribed'):
+                        pending=self.scan_tasks.get(market)
+                        if pending and not pending.done():
                             continue
-                        if memory['last_eval'].get(market)==minute:
+                        if not can_start_scan(
+                            health,now,minute,memory['last_eval'].get(market),
+                            health.get('spot_subscribed',False)
+                        ):
                             continue
-                        if time.time()%60<2:
-                            continue
-                        memory['last_eval'][market]=minute
-                        try:
-                            await self.update_market(market)
-                            health.pop('analysis_error',None)
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as exc:
-                            logger.warning('Market candles failed %s: %s',market,type(exc).__name__)
-                            health['analysis_error']='تعذر تحديث شموع '+market+': '+type(exc).__name__
-                            memory['decisions'][market]={'side':'WAIT','reason':health['analysis_error']}
-                    await asyncio.sleep(1.25)
+                        # Never await one market's history request while
+                        # scheduling the other market's evaluation.
+                        self.scan_tasks[market]=asyncio.create_task(
+                            self.scan_once(market,minute))
+                    await asyncio.sleep(0.5)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.warning('cTrader reconnect: %s: %s',type(exc).__name__,str(exc)[:100])
-                memory['error']='إعادة اتصال cTrader: '+str(exc)[:100]
+                raw=str(exc).strip()
+                tag=raw if re.fullmatch(r'[A-Z0-9_:-]{2,80}',raw) else type(exc).__name__
+                logger.warning('cTrader monitor reconnect: %s',tag)
+                memory['error']='جاري إعادة اتصال cTrader: '+tag
             finally:
+                tasks=list(self.scan_tasks.values())
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                if tasks:
+                    await asyncio.gather(*tasks,return_exceptions=True)
+                self.scan_tasks.clear()
                 memory['connected']=False
                 memory['phase']='reconnecting'
                 for market in ('XAUUSD','BTCUSD'):
@@ -495,7 +539,7 @@ async def session(request:Request):
     return {'authenticated':ok,'password_configured':bool(OWNER_PASSWORD),
         'api_configured':bool(ID and SECRET),
         'redirect_uri':(PUBLIC_URL+'/api/oauth/callback') if PUBLIC_URL else 'Set PUBLIC_URL',
-        'version':'1.2.0'}
+        'version':'1.3.0'}
 @app.post('/api/login')
 async def login(payload:OwnerLogin,request:Request):
     require_origin(request)
@@ -536,6 +580,10 @@ async def status(request:Request):
             'quote_fresh':quote_fresh,'candle_fresh':candle_fresh,
             'analysis_ready':analysis_ready,'status_text':status_text,
             'analysis_error':health.get('analysis_error'),
+            'scanner':scan_diagnostics(health,now,memory['last_eval'].get(market),
+                    bars1[-1]['t'] if bars1 else None,
+                    memory['decisions'].get(market,{}),quote_fresh),
+            'scan_duration_ms':health.get('scan_duration_ms'),
             'quote':q,'decision':memory['decisions'][market],
             'spread':round(q.get('ask',0)-q.get('bid',0),5) if q.get('bid') and q.get('ask') else None,
             'bar_count_m1':len(memory['candles'].get(market,{}).get('1',[])),
