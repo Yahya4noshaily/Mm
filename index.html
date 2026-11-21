@@ -266,7 +266,7 @@ function saveJournalCSV(){
  const rows=(state.journal||[]).filter(r=>!accountId||!r.account_id||String(r.account_id)===String(accountId));
  if(!rows.length){alert('لا يوجد سجل صفقات لتصديره.');return}
  const columns=[['المعرف','id'],['السوق','market'],['الإشارة','side'],['الاستراتيجية','strategy'],['وقت الإشارة UTC','created_at'],['الدخول النظري','entry'],['الوقف','stop'],['الهدف','target'],['نسبة العائد للمخاطرة','rr'],['الوضع','mode_label'],['مخاطرة %','risk_pct'],['الحالة','status'],['وقت النتيجة UTC','closed_at'],['سعر الخروج النظري','exit_price'],['النتيجة بوحدة R','result_r'],['الحركة السعرية لكل وحدة','price_move'],['تغير السعر %','price_move_pct'],['الأثر الافتراضي على رأس المال %','theoretical_equity_pct'],['طريقة التحقق','resolution_source'],['تفصيل النتيجة','outcome_reason'],['الحساب','account_id']];
- const quote=v=>'"'+String(v??'').replace(/^[=+@-]/,' const quote=v=>'"'+String(v??'').replace(/"/g,'""').replace(/^[=+@-]/,' function render(){')+'"';').replace(/"/g,'""')+'"';
+ const quote=v=>'"'+String(v??'').replace(/^[=+@-]/,match=>' '+match).replace(/"/g,'""')+'"';
  const csv='\ufeff'+columns.map(x=>quote(x[0])).join(',')+'\r\n'+rows.map(row=>columns.map(x=>quote(row[x[1]])).join(',')).join('\r\n');
  const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
  const anchor=document.createElement('a');anchor.href=url;anchor.download='Quantum-Simons-Paper-Journal.csv';document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
