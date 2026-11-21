@@ -729,9 +729,9 @@ async def run_journal_regression_tests():
     output=io.StringIO()
     try:
         suite=unittest.defaultTestLoader.discover(
-            start_dir=str(ROOT/'tests'),pattern='test_paper_journal.py')
+            start_dir=str(ROOT/'tests'),pattern='test_*.py')
         result=unittest.TextTestRunner(stream=output,verbosity=1).run(suite)
-        app.state.journal_tests_passed=bool(result.wasSuccessful() and result.testsRun>=7)
+        app.state.journal_tests_passed=bool(result.wasSuccessful() and result.testsRun>=15)
         if app.state.journal_tests_passed:
             logger.warning('Quantum Simons paper journal regression OK: %s tests',result.testsRun)
         else:
